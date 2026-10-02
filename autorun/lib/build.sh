@@ -15,10 +15,10 @@ BUILD_CACHE="/root/.cache/popup-nas-build"
 DEFAULT_SYSRESCUE_ISO_URL="https://fastly-cdn.system-rescue.org/releases/13.02/systemrescue-13.02-amd64.iso"
 
 # Finds the root of the currently-booted medium (where autorun/,
-# sysrescue.d/ and sysresccd/popup-nas.srm live). Tries the normal archiso
-# mount point first (fast, and where it's been every time so far), falls
-# back to scanning every partition - the same method autorun0 itself uses
-# to find its own files - in case that's ever not where it is.
+# sysrescue.d/ and popup-nas.srm live). Tries the normal archiso mount
+# point first (fast, and where it's been every time so far), falls back to
+# scanning every partition - the same method autorun0 itself uses to find
+# its own files - in case that's ever not where it is.
 find_boot_media_root() {
   local candidate="/run/archiso/bootmnt"
   if [ -f "$candidate/autorun/autorun0" ] && [ -d "$candidate/sysrescue.d" ]; then
@@ -36,6 +36,21 @@ find_boot_media_root() {
     fi
   done
   return 1
+}
+
+# Finds this stick's own popup-nas.srm, wherever it happens to live.
+# Different sticks have been built with it in different places - directly
+# at the drive root (confirmed working that way on real hardware), or
+# under a sysresccd/ folder (how scripts/make-stick.sh and make-iso.sh
+# build it, also confirmed working, via the ISO booted in Proxmox).
+# Checking only one fixed location here was a real bug - fixed 2026-10-02
+# after it broke "Make more sticks" on the first real attempt to use it.
+find_srm() {
+  local root="$1" candidate
+  for candidate in "$root/sysresccd/popup-nas.srm" "$root/popup-nas.srm"; do
+    [ -f "$candidate" ] && { echo "$candidate"; return 0; }
+  done
+  find "$root" -maxdepth 3 -iname 'popup-nas.srm' 2>/dev/null | head -n1
 }
 
 # Downloads the stock SystemRescue ISO once per boot session and caches it
@@ -104,9 +119,9 @@ build_popup_iso() {
     whiptail --msgbox "Couldn't find this stick's own autorun/sysrescue.d folders - can't build from here." 10 70
     return
   }
-  srm="$root/sysresccd/popup-nas.srm"
-  [ -f "$srm" ] || {
-    whiptail --msgbox "No popup-nas.srm found at $srm - this stick doesn't have the SRM module baked in." 10 70
+  srm=$(find_srm "$root")
+  [ -n "$srm" ] && [ -f "$srm" ] || {
+    whiptail --msgbox "Couldn't find popup-nas.srm anywhere on this stick (checked $root/sysresccd/ and $root/ directly) - this stick doesn't have the SRM module baked in." 10 76
     return
   }
 
@@ -161,9 +176,9 @@ make_new_stick() {
     whiptail --msgbox "Couldn't find this stick's own autorun/sysrescue.d folders - can't build from here." 10 70
     return
   }
-  srm="$root/sysresccd/popup-nas.srm"
-  [ -f "$srm" ] || {
-    whiptail --msgbox "No popup-nas.srm found at $srm - this stick doesn't have the SRM module baked in." 10 70
+  srm=$(find_srm "$root")
+  [ -n "$srm" ] && [ -f "$srm" ] || {
+    whiptail --msgbox "Couldn't find popup-nas.srm anywhere on this stick (checked $root/sysresccd/ and $root/ directly) - this stick doesn't have the SRM module baked in." 10 76
     return
   }
 
