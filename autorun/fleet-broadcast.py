@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 
-hostname, port, share_mount, state_path = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+hostname, port, share_mount, state_path, repo_root = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
 
 
 def my_ip():
@@ -48,6 +48,27 @@ def connection_count():
         return 0
 
 
+def my_version():
+    # This box's current git commit, short form - lets the fleet table show
+    # at a glance which boxes have self-updated and which haven't. Computed
+    # once at startup (not per-broadcast) since it only changes when
+    # self_update() restarts this whole process anyway. "-" for a stick
+    # made the old plain-file-copy way (no .git folder) or if git itself
+    # isn't available.
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo_root, "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=2,
+        )
+        v = out.stdout.strip()
+        return v if out.returncode == 0 and v else "-"
+    except Exception:
+        return "-"
+
+
+VERSION = my_version()
+
+
 def broadcaster():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -57,6 +78,7 @@ def broadcaster():
             "ip": my_ip(),
             "free_gb": free_gb(),
             "connections": connection_count(),
+            "version": VERSION,
             "ts": time.time(),
         })
         try:
@@ -84,6 +106,7 @@ def listener():
             "ip": msg.get("ip", addr[0]),
             "free_gb": msg.get("free_gb"),
             "connections": msg.get("connections", 0),
+            "version": msg.get("version", "-"),
             "seen": time.time(),
         }
         peers = {k: v for k, v in peers.items() if time.time() - v["seen"] < 60}
