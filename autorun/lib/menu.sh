@@ -22,7 +22,7 @@ main_menu() {
   local hostname_value="$1"
   local choice
   while true; do
-    choice=$(whiptail --title "popup-nas [$hostname_value]" --menu "What do you want to do?" 20 78 8 \
+    choice=$(whiptail --title "popup-nas [$hostname_value]" --menu "What do you want to do?" 21 78 9 \
       "1" "Show status screen (hostname, IP, fleet)" \
       "2" "Set up the SMB share (shrink NTFS, or use a wiped disk whole)" \
       "3" "Fill the share with the master image" \
@@ -30,7 +30,8 @@ main_menu() {
       "5" "Drop to a shell" \
       "6" "Reboot" \
       "7" "Power off" \
-      "8" "Make more sticks (build an ISO, or clone to a new USB)" 3>&1 1>&2 2>&3) || continue
+      "8" "Make more sticks (build an ISO, or clone to a new USB)" \
+      "9" "Pull latest update now (no reboot needed)" 3>&1 1>&2 2>&3) || continue
 
     case "$choice" in
       1) status_screen "$hostname_value" ;;
@@ -41,6 +42,7 @@ main_menu() {
       6) reboot ;;
       7) poweroff ;;
       8) build_submenu ;;
+      9) pull_update_now ;;
     esac
   done
 }
