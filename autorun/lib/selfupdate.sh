@@ -12,7 +12,7 @@
 #
 # Scope - what this does and doesn't touch:
 #   - DOES update: everything tracked in this repo - the autorun/
-#     scripts, fleet-broadcast.py, the sysrescue.d yaml, docs.
+#     scripts, fleet-broadcast.py, the sysrescue.d yaml, docs, VERSION.
 #   - Does NOT touch popup-nas.srm, the compiled package bundle (Samba
 #     etc). That's a binary build artifact, not source code - it still
 #     needs rebuilding by hand (build/README.md) if the package list ever
@@ -57,6 +57,32 @@ clone_update_repo() {
   local dest="$1"
   command -v git >/dev/null 2>&1 || return 1
   GIT_TERMINAL_PROMPT=0 timeout 30 git clone --quiet --branch "$(update_repo_branch)" --single-branch "$(update_repo_url)" "$dest" >/tmp/popup-clone.log 2>&1
+}
+
+# Reads this checkout's VERSION file (a plain X.Y.Z string, bumped by hand
+# whenever a change is worth calling out) plus its current git commit
+# short-hash, and returns them combined as one display string, e.g.
+# "v1.0.0 (2831762)". Used anywhere popup-nas shows its own version to the
+# operator (the main menu's title, the status screen). Falls back
+# gracefully if either piece is missing - a stick made the old
+# plain-file-copy way (no VERSION file, no .git) just shows whichever
+# part it has, or "-" if it has neither, rather than failing.
+popup_version() {
+  local repo_root ver_file version hash
+  repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
+  ver_file="$repo_root/VERSION"
+  version=""
+  [ -f "$ver_file" ] && version=$(tr -d '[:space:]' < "$ver_file")
+  hash=$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || echo "")
+  if [ -n "$version" ] && [ -n "$hash" ]; then
+    echo "v$version ($hash)"
+  elif [ -n "$version" ]; then
+    echo "v$version"
+  elif [ -n "$hash" ]; then
+    echo "$hash"
+  else
+    echo "-"
+  fi
 }
 
 # Called once per boot, right after the network comes up and before the
