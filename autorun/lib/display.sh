@@ -1,6 +1,8 @@
 status_screen() {
   local hostname_value="$1"
-  local key self_ip self_free free_bytes self_conn
+  local key self_ip self_free free_bytes self_conn self_version repo_root
+  repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
+  self_version=$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || echo "-")
   while true; do
     clear
     if command -v figlet >/dev/null 2>&1; then
@@ -27,8 +29,9 @@ status_screen() {
       self_free="-"
     fi
     self_conn=$(smb_connection_count)
-    fleet_table "$hostname_value" "${self_ip:-?}" "$self_free" "$self_conn"
+    fleet_table "$hostname_value" "${self_ip:-?}" "$self_free" "$self_conn" "$self_version"
     echo ""
+    echo "CONN colour key: green = idle, yellow = some load, red = busy"
     echo "Press Q then Enter to go back to the menu (this refreshes every 5s)"
     read -r -t 5 key
     [ "${key:-}" = "q" ] && return
