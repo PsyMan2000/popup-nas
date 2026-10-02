@@ -215,6 +215,22 @@ make_new_stick() {
   partprobe "$disk" 2>/dev/null || true
   sleep 2
 
+  # dd'ing the ISO also copies its GPT header as-is - which still describes
+  # the ISO's own small original size, not whatever's actually available on
+  # this physical stick, however much bigger it is. Left alone,
+  # parted/lsblk both report free space relative to that stale, too-small
+  # notion of "the end of the disk" - this is what caused "only found 1MB
+  # free" on a stick that was actually twice the size of another one that
+  # worked fine. sgdisk -e fixes the GPT header to match this disk's real
+  # size (relocating the backup GPT structures to the actual end of the
+  # disk) - standard practice after dd'ing a smaller image onto bigger
+  # media, and a safe no-op if the sizes already match. gptfdisk (which
+  # provides sgdisk) is already in this stick's own package list - see
+  # build/README.md.
+  sgdisk -e "$disk" >/tmp/popup-stick-gpt-fix.log 2>&1 || true
+  partprobe "$disk" 2>/dev/null || true
+  sleep 1
+
   # The ISO's own partition table only covers the ISO's own small boot
   # content (a few hundred MB at most, whatever the ISO itself needs) - it
   # does NOT expand to use whatever's left on the physical stick, however
@@ -267,7 +283,7 @@ make_new_stick() {
   done
   if [ "$mounted" -ne 1 ]; then
     rmdir "$mnt" 2>/dev/null
-    whiptail --msgbox "Wrote $disk's boot image and created a data partition ($data_part), but couldn't mount it after several tries to copy autorun/sysrescue.d/SRM onto. See /tmp/popup-stick-mount.log, or try 'mount $data_part /mnt' by hand from a shell." 12 78
+    whiptail --msgbox "Wrote the ISO to $disk, but couldn't mount its data partition ($data_part) after several tries to copy autorun/sysrescue.d/SRM onto - it may need longer to settle after writing on this particular stick. See /tmp/popup-stick-mount.log, or try 'mount $data_part /mnt' by hand from a shell." 12 78
     return
   fi
   echo "Mounted $data_part: $(df -h --output=avail "$mnt" 2>/dev/null | tail -n1 | tr -d ' ') free for autorun/sysrescue.d/SRM."
