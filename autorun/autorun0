@@ -66,6 +66,16 @@ scan_all_partitions() {
 # properly. Rewritten fresh on every boot, so it always reflects this
 # boot's own $HERE and UPDATE_REPO_URL/UPDATE_BRANCH (from popup-nas.conf,
 # if set) rather than whatever they were on some earlier boot.
+#
+# $1 must be the REPO ROOT (the folder containing autorun/ and
+# sysrescue.d/ as siblings) - NOT $HERE itself, which is the autorun/
+# folder one level further in. Found on real hardware 2026-10-02: this
+# was called with $HERE directly, so every path inside the generated
+# menu() function below ended up one folder too deep (checking for
+# autorun/autorun, copying into autorun/autorun/, running
+# autorun/autorun/autorun0) - meaning `menu` always failed its own
+# sanity check and never worked at all, on any stick, until caught by a
+# real test. See the call site at the bottom of this file.
 write_ssh_menu_helper() {
   local root="$1" repo_url repo_branch
   repo_url=$(update_repo_url)
@@ -145,7 +155,10 @@ echo "=== popup-nas ==="
 echo ""
 wait_for_network
 self_update
-write_ssh_menu_helper "$HERE"
+# $HERE is the autorun/ folder itself - write_ssh_menu_helper() needs the
+# REPO ROOT one level up from that (see its own comment above), the same
+# way self_update() works out repo_root for itself in lib/selfupdate.sh.
+write_ssh_menu_helper "$(cd "$HERE/.." 2>/dev/null && pwd)"
 
 HOSTNAME_VALUE=$(ask_hostname)
 hostnamectl set-hostname "$HOSTNAME_VALUE" 2>/dev/null || true
