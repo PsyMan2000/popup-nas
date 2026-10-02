@@ -1,8 +1,13 @@
 status_screen() {
   local hostname_value="$1"
-  local key self_ip self_free free_bytes self_conn self_version repo_root
+  local key self_ip self_free free_bytes self_conn self_version display_version repo_root
   repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
   self_version=$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || echo "-")
+  # The fleet table's own VER column stays as the bare commit hash above
+  # (self_version) - it's a narrow column built for a short value.
+  # display_version is the fuller "vX.Y.Z (hash)" form from
+  # popup_version(), shown once on its own line instead.
+  display_version=$(popup_version)
   while true; do
     clear
     if command -v figlet >/dev/null 2>&1; then
@@ -10,6 +15,7 @@ status_screen() {
     else
       echo "=== $hostname_value ==="
     fi
+    echo "Version: $display_version"
     echo ""
     echo "IP address(es):"
     ip -4 -o addr show scope global 2>/dev/null | awk '{print "  " $4}'
