@@ -14,13 +14,36 @@ is_our_autorun_folder() {
   [ -f "$1/autorun0" ] && [ -d "$1/lib" ]
 }
 
+# $1 = a directory to check. True if the filesystem backing it is a real
+# on-disk type, so writes made there reach the physical boot media and
+# survive a reboot. False for RAM-backed types (tmpfs, ramfs, overlay,
+# squashfs, or unknown) - including, critically, whatever temporary copy
+# SystemRescue's own autorun mechanism makes before running our scripts
+# (see the "copytoram" comment on scan_all_partitions below). Found on
+# real hardware 2026-10-02: find_media_root()'s broad search could land
+# on exactly such a RAM copy and accept it, since it has all the right
+# files - at which point self_update() and everything else kept
+# "succeeding" for the rest of that boot session, while never actually
+# reaching the real stick at all, silently reverting on the next reboot.
+is_real_disk_backed() {
+  local path="$1" fstype
+  fstype=$(findmnt -T "$path" -no FSTYPE 2>/dev/null)
+  case "$fstype" in
+    ""|tmpfs|ramfs|overlay|squashfs|devtmpfs) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 find_media_root() {
   # First, cheap guess: maybe our autorun folder is already mounted
   # somewhere obvious. True on some setups, but not reliably true on real
-  # hardware - kept only as a fast first attempt.
+  # hardware - kept only as a fast first attempt. Must also be backed by
+  # real disk (see is_real_disk_backed above) - otherwise this can match
+  # SystemRescue's own temporary RAM copy instead of the real stick, and
+  # every later write would be silently thrown away on reboot.
   local d
   for d in $(find /run /media /mnt /root 2>/dev/null -maxdepth 6 -type d -name autorun); do
-    if is_our_autorun_folder "$d"; then
+    if is_our_autorun_folder "$d" && is_real_disk_backed "$d"; then
       echo "$d"
       return 0
     fi
@@ -29,17 +52,20 @@ find_media_root() {
 }
 
 scan_all_partitions() {
-  # SystemRescue's autorun feature copies our scripts elsewhere and (it
-  # seems) unmounts the stick again before actually running them - so
-  # there's usually nothing to find mounted at all by this point. And we
-  # can't rely on a custom volume label either: Rufus keeps the SystemRescue
-  # ISO's own label (e.g. RESCUE1302) when writing it in image mode, and
-  # Windows' rename/label tools don't override that.
+  # SystemRescue's autorun feature copies our scripts elsewhere (into RAM
+  # - see is_real_disk_backed above) and (it seems) unmounts the stick
+  # again before actually running them - so there's usually nothing to
+  # find mounted at all by this point. And we can't rely on a custom
+  # volume label either: Rufus keeps the SystemRescue ISO's own label
+  # (e.g. RESCUE1302) when writing it in image mode, and Windows'
+  # rename/label tools don't override that.
   #
   # So instead: try every partition on the machine, read-only, and check
   # each one for our own folder. This machine only just booted, so there
   # are never more than a handful of partitions to try - it's fast, and it
-  # doesn't care what any tool decided to call the drive.
+  # doesn't care what any tool decided to call the drive. Every candidate
+  # here is a genuine block device partition (from lsblk), never RAM, so
+  # no is_real_disk_backed() check is needed on top of this one.
   local dev
   udevadm settle --timeout=5 2>/dev/null || true
   mkdir -p "$MEDIA_MOUNTPOINT"
