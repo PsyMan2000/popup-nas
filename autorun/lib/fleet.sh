@@ -10,6 +10,17 @@ FLEET_CONN_BUSY_THRESHOLD=3
 start_fleet_broadcast() {
   local hostname_value="$1" repo_root
   repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
+  # Stop any fleet-broadcast.py this exact machine may already have
+  # running before starting a new one. Several things relaunch the
+  # foreground autorun0 script on the same box without ever touching this
+  # backgrounded process - self_update()'s restart after pulling a new
+  # version, `menu` relaunching fresh over a new SSH login, or just
+  # opening a second session (SSH alongside the console) and running the
+  # manual refresh sequence by hand. Each one used to leave yet another
+  # copy broadcasting under its own hostname, showing up as a "ghost"
+  # duplicate row in the fleet table for what's really just one machine.
+  # Confirmed on real hardware 2026-10-02.
+  pkill -f "fleet-broadcast\.py" 2>/dev/null || true
   python3 "$HERE/fleet-broadcast.py" "$hostname_value" "$FLEET_PORT" "$SHARE_MOUNT" "$FLEET_STATE" "$repo_root" >/tmp/popup-fleet.log 2>&1 &
 }
 
