@@ -65,7 +65,7 @@ clone_update_repo() {
 # was and carries on into the normal menu - a flaky connection or a
 # conflicted history can never stop this stick from booting.
 self_update() {
-  local repo_root before after
+  local repo_root before after short_before short_after
 
   repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)" || return 0
   command -v git >/dev/null 2>&1 || { echo "Self-update: git isn't installed on this stick - skipping."; return 0; }
@@ -90,8 +90,15 @@ self_update() {
   after=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo "")
 
   if [ -n "$after" ] && [ "$before" != "$after" ]; then
-    echo " updated ($(echo "$before" | cut -c1-7) -> $(echo "$after" | cut -c1-7)). Restarting with the new version..."
-    sleep 1
+    short_before=$(echo "$before" | cut -c1-7)
+    short_after=$(echo "$after" | cut -c1-7)
+    echo " updated ($short_before -> $short_after). Restarting with the new version..."
+    # A brief, non-interactive confirmation - no keypress needed, and it
+    # disappears on its own once the next screen draws. Mainly here so an
+    # actual update is obvious while deliberately testing self-update,
+    # rather than a line of text that scrolls past in under a second.
+    whiptail --infobox "Self-update: pulled a new version.\n\n$short_before -> $short_after\n\nRestarting with the new version..." 11 60
+    sleep 3
     exec bash "$HERE/autorun0"
   fi
   echo " already up to date."
