@@ -231,29 +231,49 @@ make_new_stick() {
   partprobe "$disk" 2>/dev/null || true
   sleep 1
 
-  # The ISO's own partition table only covers the ISO's own small boot
-  # content (a few hundred MB at most, whatever the ISO itself needs) - it
-  # does NOT expand to use whatever's left on the physical stick, however
-  # big that stick actually is. Found on real hardware 2026-10-02: copying
-  # popup-nas.srm onto that existing partition ran out of room, even
-  # though the stick itself had plenty of unused capacity beyond it.
+  # IMPORTANT, found on real hardware 2026-10-02: SystemRescue's hybrid
+  # ISO doesn't put its actual OS content (kernel, airootfs squashfs,
+  # GRUB's own menu/config) in a normal partition at all - the whole
+  # ISO9660 filesystem just starts at the very beginning of the disk and
+  # is read directly, with only a tiny EFI System Partition (a megabyte
+  # or so, for UEFI booting) showing up as a real entry in the partition
+  # table. That means the partition table can NEVER be trusted to say
+  # where the ISO's real content ends - reading it back (as this used to)
+  # found only that tiny EFI partition and concluded free space started
+  # right after it, at ~1.5MiB in. Formatting a new partition there
+  # landed it WITHIN the live ISO content rather than past it, destroying
+  # enough of it (GRUB's menu/config and/or the kernel) that a stick
+  # built that way wrote and reported success, but only ever reached a
+  # bare "grub>" prompt on boot - confirmed by a real boot test.
   #
-  # Rather than growing that partition's filesystem in place (risks
-  # corrupting the EFI/BIOS boot files already on it - the ones this stick
-  # actually needs to boot at all), this creates a brand new partition in
-  # the stick's remaining free space purely to hold
-  # autorun/sysrescue.d/popup-nas.srm. autorun0 finds its own files by
-  # scanning every partition's actual content (see find_boot_media_root
-  # and the real-hardware gotcha it's built for), not by any fixed
-  # partition number or label, so a second partition works exactly the
-  # same as the first one for this - and it's safer, since nothing
-  # already on the disk gets touched.
-  local part_end new_part_mb
-  part_end=$(parted -s "$disk" unit MiB print 2>/dev/null | awk '/^ *[0-9]+ /{end=$3} END{print end}')
-  if [ -z "$part_end" ]; then
-    whiptail --msgbox "Wrote $disk's boot image, but couldn't read its partition table back to find free space for autorun/sysrescue.d/SRM. Check 'parted $disk print' from a shell." 12 78
+  # The one number that can always be trusted instead is the exact byte
+  # size of the ISO file $src_iso that was just dd'd onto this disk - dd
+  # copied precisely that many bytes starting at the very start of the
+  # disk and touched nothing beyond it, regardless of what any partition
+  # table does or doesn't claim. Starting the new partition comfortably
+  # past that point (rounded up, plus a spare megabyte of margin) is
+  # always safe.
+  #
+  # Rather than growing the ISO's own content or its tiny EFI partition
+  # in place (risks corrupting boot files actually needed to boot at
+  # all), this creates a brand new partition in the stick's genuinely
+  # free remaining space purely to hold autorun/sysrescue.d/popup-nas.srm.
+  # autorun0 finds its own files by scanning every partition's actual
+  # content (see find_boot_media_root and the real-hardware gotcha it's
+  # built for), not by any fixed partition number or label, so a new
+  # partition works exactly the same as the first one for this.
+  local src_size_bytes src_end_mib part_end new_part_mb
+  src_size_bytes=$(stat -c %s "$src_iso" 2>/dev/null)
+  if [ -z "$src_size_bytes" ]; then
+    whiptail --msgbox "Wrote $disk's boot image, but couldn't read $src_iso's size back to work out where it safely ends on the disk, so nothing further was touched. Don't add a data partition to this stick by hand without checking 'stat $src_iso' first." 12 78
     return
   fi
+  # Round the ISO's exact byte size up to the next whole MiB, then add
+  # one more MiB of margin on top - cheap insurance against any rounding
+  # difference between the file's exact size and how it actually landed
+  # on the disk.
+  src_end_mib=$(( (src_size_bytes + 1048575) / 1048576 + 1 ))
+  part_end="${src_end_mib}MiB"
   if ! parted -s "$disk" mkpart primary ext4 "$part_end" 100% 2>/tmp/popup-stick-part.log; then
     whiptail --msgbox "Wrote $disk's boot image, but couldn't create a second partition in its remaining free space for autorun/sysrescue.d/SRM - this stick may be too small overall. See /tmp/popup-stick-part.log." 12 78
     return
@@ -264,16 +284,14 @@ make_new_stick() {
   # Picking the partition by "whichever one lsblk lists last" assumed a
   # brand new partition always gets the highest number - wrong on real
   # hardware, 2026-10-02: a stick whose only existing partition was
-  # numbered 2 (a small boot/ESP partition near the very start) left
-  # number 1 free, so the new partition created just above took number 1
-  # instead - putting it FIRST in lsblk's output (which lists by number,
-  # not by physical position on the disk or by size), with the small
-  # original partition coming last. That picked the wrong, tiny partition
-  # and reported "only found 1MB free" even though the real new data
-  # partition had been created correctly at full size. Picking the
-  # LARGEST partition on the disk instead is reliable regardless of
+  # numbered 2 (the small EFI partition near the very start) left number
+  # 1 free, so the new partition created just above took number 1 instead
+  # - putting it FIRST in lsblk's output (which lists by number, not by
+  # physical position on the disk or by size), with the small original
+  # partition coming last. That picked the wrong, tiny partition. Picking
+  # the LARGEST partition on the disk instead is reliable regardless of
   # numbering, since this new partition always uses the stick's entire
-  # remaining free space and will dwarf any small boot/ESP partition
+  # remaining free space and will dwarf any small boot/EFI partition
   # already there.
   data_part=$(lsblk -brno NAME,TYPE,SIZE "$disk" | awk '$2=="part"{print $3, $1}' | sort -n | tail -n1 | awk '{print "/dev/"$2}')
   if [ -z "$data_part" ] || [ ! -b "$data_part" ]; then
