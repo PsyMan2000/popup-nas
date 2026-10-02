@@ -67,7 +67,11 @@ ensure_source_iso() {
     echo "$dest"
     return 0
   fi
-  whiptail --infobox "Downloading $fname (around 1.3GB, only needed once per boot)..." 8 70
+  # >&2 here is deliberate: this function's whole stdout is captured by
+  # callers (src_iso=$(ensure_source_iso)), and whiptail draws its box by
+  # writing to whatever stdout it's given - without this redirect, that
+  # drawing leaks straight into $src_iso instead of appearing on screen.
+  whiptail --infobox "Downloading $fname (around 1.3GB, only needed once per boot)..." 8 70 >&2
   if ! curl -fL -o "$dest" "$url" 2>"$BUILD_CACHE/download.log"; then
     rm -f "$dest"
     whiptail --msgbox "Download failed. Check network access and the URL:\n$url\n\n(set SYSRESCUE_ISO_URL in popup-nas.conf to change it)\n\nSee $BUILD_CACHE/download.log for details." 14 78
