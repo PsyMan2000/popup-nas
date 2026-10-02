@@ -1,0 +1,12 @@
+# This repo holds Linux shell/Python scripts that boot on SystemRescue -
+# they must always have Unix (LF) line endings, never Windows (CRLF).
+#
+# Without this file, Windows git installs commonly convert LF to CRLF on
+# checkout (the core.autocrlf=true default many Windows git installers
+# suggest). A CRLF line ending on a script's #!/bin/bash shebang line breaks
+# it outright - Linux tries to run the interpreter "/bin/bash\r", which
+# doesn't exist, and the script fails to execute at all with a
+# "No such file or directory" error, before it ever gets a chance to run.
+#
+# This forces LF regardless of anyone's local git configuration.
+* text=auto eol=lf
