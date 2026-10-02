@@ -222,12 +222,31 @@ make_new_stick() {
   fi
 
   mnt=$(mktemp -d)
-  mount "$data_part" "$mnt"
+  local mount_tries=0 mounted=0
+  while [ "$mount_tries" -lt 5 ]; do
+    if mount "$data_part" "$mnt" 2>/tmp/popup-stick-mount.log; then
+      mounted=1
+      break
+    fi
+    sleep 1
+    mount_tries=$((mount_tries + 1))
+  done
+  if [ "$mounted" -ne 1 ]; then
+    rmdir "$mnt" 2>/dev/null
+    whiptail --msgbox "Wrote the ISO to $disk, but couldn't mount its data partition ($data_part) after several tries to copy autorun/sysrescue.d/SRM onto - it may need longer to settle after writing on this particular stick. See /tmp/popup-stick-mount.log, or try 'mount $data_part /mnt' by hand from a shell." 12 78
+    return
+  fi
+  echo "Mounted $data_part: $(df -h --output=avail "$mnt" 2>/dev/null | tail -n1 | tr -d ' ') free for autorun/sysrescue.d/SRM."
 
   echo "Getting the latest popup-nas files ready..."
   stage_update_source "$root" "$mnt"
   mkdir -p "$mnt/sysresccd"
-  cp "$srm" "$mnt/sysresccd/"
+  if ! cp "$srm" "$mnt/sysresccd/"; then
+    umount "$mnt" 2>/dev/null
+    rmdir "$mnt" 2>/dev/null
+    whiptail --msgbox "Wrote $disk's boot image, but ran out of room on its data partition ($data_part) while copying popup-nas.srm onto it - that partition may be too small on this particular stick. Check 'lsblk $disk' and 'df -h' from a shell before trusting this stick." 12 78
+    return
+  fi
 
   umount "$mnt"
   rmdir "$mnt"
