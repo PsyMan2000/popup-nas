@@ -103,3 +103,23 @@ self_update() {
   fi
   echo " already up to date."
 }
+
+# Menu-triggered version of the same check self_update() does
+# automatically at boot - lets an operator force a re-check mid-session,
+# e.g. after a fix was just pushed to the stable branch while this box is
+# already up and running on-site. Safe to run any time: a clean
+# fast-forward restarts the menu script with the new version (same as
+# boot, including the confirmation box above), and anything else - no
+# update available, no network, not a git checkout - leaves the box
+# exactly as it was and just says so, rather than silently doing nothing
+# the way the boot-time check does. Never touches the SMB share this box
+# may already be serving - only the autorun/sysrescue.d scripts update.
+pull_update_now() {
+  clear
+  echo "=== Pull latest update now ==="
+  echo ""
+  self_update
+  # Only reached if self_update() didn't exec into a fresh autorun0 above
+  # - i.e. there was nothing new to pull (or it couldn't check).
+  whiptail --msgbox "Nothing new to apply right now - see the messages above for why (already up to date, no network, or this stick isn't a git checkout). The share this box is already serving, if any, is untouched either way." 12 76
+}
