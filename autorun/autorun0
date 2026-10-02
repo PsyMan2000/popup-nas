@@ -56,6 +56,43 @@ scan_all_partitions() {
   return 1
 }
 
+# Writes a tiny "menu" shell function to /etc/profile.d/, so a fresh SSH
+# login later in this same boot session - a separate session from this
+# console one, which inherits neither $HERE nor anything sourced into this
+# session - can get back to a current, interactive menu without retyping
+# the whole git-clone-and-relaunch sequence by hand. A plain alias can't
+# safely hold a multi-step sequence with conditionals like this one
+# (quoting and error-handling get fragile); a function handles it
+# properly. Rewritten fresh on every boot, so it always reflects this
+# boot's own $HERE and UPDATE_REPO_URL/UPDATE_BRANCH (from popup-nas.conf,
+# if set) rather than whatever they were on some earlier boot.
+write_ssh_menu_helper() {
+  local root="$1" repo_url repo_branch
+  repo_url=$(update_repo_url)
+  repo_branch=$(update_repo_branch)
+  mkdir -p /etc/profile.d
+  cat > /etc/profile.d/popup-nas-tools.sh <<EOF
+# Written by popup-nas's autorun0 at boot - see autorun/autorun0.
+menu() {
+  local root="$root" fresh
+  if [ ! -d "\$root/autorun" ]; then
+    echo "menu: \$root doesn't look like this box's boot media any more - check 'lsblk' by hand." >&2
+    return 1
+  fi
+  fresh=\$(mktemp -d)
+  if ! git clone --quiet --branch "$repo_branch" --single-branch "$repo_url" "\$fresh"; then
+    echo "menu: couldn't clone $repo_url - check network and try again." >&2
+    rm -rf "\$fresh"
+    return 1
+  fi
+  [ -f "\$root/autorun/popup-nas.conf" ] && cp "\$root/autorun/popup-nas.conf" "\$fresh/autorun/popup-nas.conf"
+  cp -r "\$fresh/." "\$root/"
+  rm -rf "\$fresh"
+  bash "\$root/autorun/autorun0"
+}
+EOF
+}
+
 HERE="$(find_media_root)"
 if [ -z "${HERE:-}" ]; then
   HERE="$(scan_all_partitions)"
@@ -71,6 +108,7 @@ if [ -z "${HERE:-}" ]; then
   echo "blkid output:"
   blkid 2>/dev/null
   echo ""
+  echo "Tell Claude what's listed above (a photo of this screen is fine)."
   exec bash
 fi
 export HERE
@@ -107,6 +145,7 @@ echo "=== popup-nas ==="
 echo ""
 wait_for_network
 self_update
+write_ssh_menu_helper "$HERE"
 
 HOSTNAME_VALUE=$(ask_hostname)
 hostnamectl set-hostname "$HOSTNAME_VALUE" 2>/dev/null || true
