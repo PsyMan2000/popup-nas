@@ -215,11 +215,45 @@ make_new_stick() {
   partprobe "$disk" 2>/dev/null || true
   sleep 2
 
-  data_part=$(lsblk -lno NAME,FSTYPE "$disk" | awk '$2=="vfat" || $2=="exfat" {print "/dev/"$1; exit}')
-  if [ -z "$data_part" ]; then
-    whiptail --msgbox "Wrote the ISO to $disk, but couldn't find its writable data partition to copy autorun/sysrescue.d/SRM onto. Check 'lsblk $disk' from a shell and copy them on by hand." 12 78
+  # The ISO's own partition table only covers the ISO's own small boot
+  # content (a few hundred MB at most, whatever the ISO itself needs) - it
+  # does NOT expand to use whatever's left on the physical stick, however
+  # big that stick actually is. Found on real hardware 2026-10-02: copying
+  # popup-nas.srm onto that existing partition ran out of room, even
+  # though the stick itself had plenty of unused capacity beyond it.
+  #
+  # Rather than growing that partition's filesystem in place (risks
+  # corrupting the EFI/BIOS boot files already on it - the ones this stick
+  # actually needs to boot at all), this creates a brand new partition in
+  # the stick's remaining free space purely to hold
+  # autorun/sysrescue.d/popup-nas.srm. autorun0 finds its own files by
+  # scanning every partition's actual content (see find_boot_media_root
+  # and the real-hardware gotcha it's built for), not by any fixed
+  # partition number or label, so a second partition works exactly the
+  # same as the first one for this - and it's safer, since nothing
+  # already on the disk gets touched.
+  local part_end new_part_mb
+  part_end=$(parted -s "$disk" unit MiB print 2>/dev/null | awk '/^ *[0-9]+ /{end=$3} END{print end}')
+  if [ -z "$part_end" ]; then
+    whiptail --msgbox "Wrote $disk's boot image, but couldn't read its partition table back to find free space for autorun/sysrescue.d/SRM. Check 'parted $disk print' from a shell." 12 78
     return
   fi
+  if ! parted -s "$disk" mkpart primary ext4 "$part_end" 100% 2>/tmp/popup-stick-part.log; then
+    whiptail --msgbox "Wrote $disk's boot image, but couldn't create a second partition in its remaining free space for autorun/sysrescue.d/SRM - this stick may be too small overall. See /tmp/popup-stick-part.log." 12 78
+    return
+  fi
+  partprobe "$disk" 2>/dev/null || true
+  sleep 2
+
+  data_part=$(lsblk -lno NAME "$disk" | tail -n1)
+  data_part="/dev/$data_part"
+  new_part_mb=$(lsblk -bno SIZE "$data_part" 2>/dev/null | awk '{print int($1/1024/1024)}')
+  if [ -z "$new_part_mb" ] || [ "$new_part_mb" -lt 100 ]; then
+    whiptail --msgbox "Wrote $disk's boot image, but only found ${new_part_mb:-0}MB free to use for autorun/sysrescue.d/SRM - this stick is too small overall for this to work. Try a bigger stick." 12 78
+    return
+  fi
+
+  mkfs.ext4 -F -L POPUPDATA "$data_part" >/tmp/popup-stick-mkfs.log 2>&1
 
   mnt=$(mktemp -d)
   local mount_tries=0 mounted=0
@@ -233,7 +267,7 @@ make_new_stick() {
   done
   if [ "$mounted" -ne 1 ]; then
     rmdir "$mnt" 2>/dev/null
-    whiptail --msgbox "Wrote the ISO to $disk, but couldn't mount its data partition ($data_part) after several tries to copy autorun/sysrescue.d/SRM onto - it may need longer to settle after writing on this particular stick. See /tmp/popup-stick-mount.log, or try 'mount $data_part /mnt' by hand from a shell." 12 78
+    whiptail --msgbox "Wrote $disk's boot image and created a data partition ($data_part), but couldn't mount it after several tries to copy autorun/sysrescue.d/SRM onto. See /tmp/popup-stick-mount.log, or try 'mount $data_part /mnt' by hand from a shell." 12 78
     return
   fi
   echo "Mounted $data_part: $(df -h --output=avail "$mnt" 2>/dev/null | tail -n1 | tr -d ' ') free for autorun/sysrescue.d/SRM."
@@ -244,7 +278,7 @@ make_new_stick() {
   if ! cp "$srm" "$mnt/sysresccd/"; then
     umount "$mnt" 2>/dev/null
     rmdir "$mnt" 2>/dev/null
-    whiptail --msgbox "Wrote $disk's boot image, but ran out of room on its data partition ($data_part) while copying popup-nas.srm onto it - that partition may be too small on this particular stick. Check 'lsblk $disk' and 'df -h' from a shell before trusting this stick." 12 78
+    whiptail --msgbox "Wrote $disk's boot image and data partition, but ran out of room while copying popup-nas.srm onto it ($data_part) - check 'df -h' and 'lsblk $disk' from a shell before trusting this stick." 12 78
     return
   fi
 
