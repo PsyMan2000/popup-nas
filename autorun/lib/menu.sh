@@ -20,9 +20,14 @@ build_submenu() {
 
 main_menu() {
   local hostname_value="$1"
-  local choice
+  local choice version
+  # Computed once per session, not per loop - popup_version() only ever
+  # changes via self_update(), and that restarts this whole script fresh
+  # anyway (see exec bash "$HERE/autorun0" in lib/selfupdate.sh), so this
+  # loop never needs to re-read it.
+  version=$(popup_version)
   while true; do
-    choice=$(whiptail --title "popup-nas [$hostname_value]" --menu "What do you want to do?" 21 78 9 \
+    choice=$(whiptail --title "popup-nas [$hostname_value] - $version" --menu "What do you want to do?" 21 78 9 \
       "1" "Show status screen (hostname, IP, fleet)" \
       "2" "Set up the SMB share (shrink NTFS, or use a wiped disk whole)" \
       "3" "Fill the share with the master image" \
