@@ -215,18 +215,18 @@ make_new_stick() {
   partprobe "$disk" 2>/dev/null || true
   sleep 2
 
-  # dd'ing the ISO also copies its GPT header as-is - which still describes
-  # the ISO's own small original size, not whatever's actually available on
-  # this physical stick, however much bigger it is. Left alone,
-  # parted/lsblk both report free space relative to that stale, too-small
-  # notion of "the end of the disk" - this is what caused "only found 1MB
-  # free" on a stick that was actually twice the size of another one that
-  # worked fine. sgdisk -e fixes the GPT header to match this disk's real
-  # size (relocating the backup GPT structures to the actual end of the
-  # disk) - standard practice after dd'ing a smaller image onto bigger
-  # media, and a safe no-op if the sizes already match. gptfdisk (which
-  # provides sgdisk) is already in this stick's own package list - see
-  # build/README.md.
+  # dd'ing the ISO also copies its existing partition table as-is, which
+  # still describes the ISO's own small original size, not whatever's
+  # actually available on this physical stick. On a GPT-labelled ISO,
+  # sgdisk -e fixes that up by relocating the backup GPT structures to the
+  # disk's real end - but SystemRescue's hybrid ISO has turned out to use
+  # a plain old-style MBR (msdos) table instead on the hardware tested so
+  # far, confirmed 2026-10-02 ('Partition Table: msdos' in parted's
+  # output), for which there's no equivalent stale-header problem - MBR
+  # doesn't store a separate backup copy the way GPT does. This call is
+  # still harmless to leave in (sgdisk simply logs "Invalid partition
+  # data!" and does nothing on an MBR disk) in case some build of the ISO
+  # ever does use GPT instead.
   sgdisk -e "$disk" >/tmp/popup-stick-gpt-fix.log 2>&1 || true
   partprobe "$disk" 2>/dev/null || true
   sleep 1
@@ -261,8 +261,25 @@ make_new_stick() {
   partprobe "$disk" 2>/dev/null || true
   sleep 2
 
-  data_part=$(lsblk -lno NAME "$disk" | tail -n1)
-  data_part="/dev/$data_part"
+  # Picking the partition by "whichever one lsblk lists last" assumed a
+  # brand new partition always gets the highest number - wrong on real
+  # hardware, 2026-10-02: a stick whose only existing partition was
+  # numbered 2 (a small boot/ESP partition near the very start) left
+  # number 1 free, so the new partition created just above took number 1
+  # instead - putting it FIRST in lsblk's output (which lists by number,
+  # not by physical position on the disk or by size), with the small
+  # original partition coming last. That picked the wrong, tiny partition
+  # and reported "only found 1MB free" even though the real new data
+  # partition had been created correctly at full size. Picking the
+  # LARGEST partition on the disk instead is reliable regardless of
+  # numbering, since this new partition always uses the stick's entire
+  # remaining free space and will dwarf any small boot/ESP partition
+  # already there.
+  data_part=$(lsblk -brno NAME,TYPE,SIZE "$disk" | awk '$2=="part"{print $3, $1}' | sort -n | tail -n1 | awk '{print "/dev/"$2}')
+  if [ -z "$data_part" ] || [ ! -b "$data_part" ]; then
+    whiptail --msgbox "Wrote $disk's boot image, but couldn't work out which partition on it is the new one just created. Check 'lsblk -b $disk' from a shell." 12 78
+    return
+  fi
   new_part_mb=$(lsblk -bno SIZE "$data_part" 2>/dev/null | awk '{print int($1/1024/1024)}')
   if [ -z "$new_part_mb" ] || [ "$new_part_mb" -lt 100 ]; then
     whiptail --msgbox "Wrote $disk's boot image, but only found ${new_part_mb:-0}MB free to use for autorun/sysrescue.d/SRM - this stick is too small overall for this to work. Try a bigger stick." 12 78
