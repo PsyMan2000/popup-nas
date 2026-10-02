@@ -1,0 +1,40 @@
+# popup-nas default boot options.
+#
+# SystemRescue reads any *.yaml file (must be .yaml, not .yml) in a
+# sysrescue.d folder at the root of the boot device, and applies these as
+# default boot options - for both BIOS and UEFI boot, with no need to
+# hand-edit grub.cfg or syslinux.cfg. See:
+# https://www.system-rescue.org/manual/Configuring_SystemRescue/
+#
+# This means staff booting a popup-nas stick don't need to press 'e' or
+# 'Tab' at the boot menu and type copytoram/loadsrm by hand every single
+# time - just pick the stick in the machine's boot menu and press Enter.
+#
+# This file must live at the DRIVE ROOT in a folder called sysrescue.d,
+# e.g. E:\sysrescue.d\200-popup-nas.yaml - NOT inside the autorun folder.
+#
+# nofirewall: SystemRescue enables its iptables/ip6tables firewall by
+# default, which blocks the SMB share from being reachable on the network
+# even while smbd/nmbd are running fine. This is a temporary popup box on
+# a trusted LAN with little need for inbound filtering, so the firewall
+# is switched off automatically. If this tool is ever used somewhere that
+# DOES need the firewall on, delete this line (or set it to false) and
+# rebuild/re-copy this file before handing the stick out.
+#
+# sysconfig.authorized_keys: installs SSH public keys into root's
+# /root/.ssh/authorized_keys automatically at boot, so SSH login works
+# with a key and no password step (useful for typing/pasting commands
+# remotely when the popup-nas box only has an awkward physical keyboard
+# to hand). Add more "name": "key" lines here for anyone else who needs
+# remote access. This does NOT disable password login by itself - if a
+# root password is also ever set (e.g. via rootpass at boot, or running
+# passwd), both ways in will work side by side.
+
+global:
+    copytoram: true
+    loadsrm: true
+    nofirewall: true
+
+sysconfig:
+    authorized_keys:
+        "simon@laptop (eddsa-key-20260930)": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINnai6kbe7/+oaDZp21t4knJ520EDF6EKQJCXz8nS8Di"

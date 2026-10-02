@@ -1,0 +1,116 @@
+#!/bin/bash
+# popup-nas autorun entrypoint. SystemRescue's autorun mechanism runs any
+# file here named autorun/autorun0 through autorun/autorunF automatically
+# after console login (see docs/architecture.md). This script IS the
+# interactive session for whoever is at the keyboard — it never silently
+# hands back to a bare root prompt; "Drop to shell" in the menu is explicit.
+set -uo pipefail
+
+MEDIA_MOUNTPOINT="/mnt/popup-media"
+
+is_our_autorun_folder() {
+  # $1 = a directory to check. True if it's genuinely our autorun folder
+  # (not just something that happens to be named "autorun").
+  [ -f "$1/autorun0" ] && [ -d "$1/lib" ]
+}
+
+find_media_root() {
+  # First, cheap guess: maybe our autorun folder is already mounted
+  # somewhere obvious. True on some setups, but not reliably true on real
+  # hardware - kept only as a fast first attempt.
+  local d
+  for d in $(find /run /media /mnt /root 2>/dev/null -maxdepth 6 -type d -name autorun); do
+    if is_our_autorun_folder "$d"; then
+      echo "$d"
+      return 0
+    fi
+  done
+  return 1
+}
+
+scan_all_partitions() {
+  # SystemRescue's autorun feature copies our scripts elsewhere and (it
+  # seems) unmounts the stick again before actually running them - so
+  # there's usually nothing to find mounted at all by this point. And we
+  # can't rely on a custom volume label either: Rufus keeps the SystemRescue
+  # ISO's own label (e.g. RESCUE1302) when writing it in image mode, and
+  # Windows' rename/label tools don't override that.
+  #
+  # So instead: try every partition on the machine, read-only, and check
+  # each one for our own folder. This machine only just booted, so there
+  # are never more than a handful of partitions to try - it's fast, and it
+  # doesn't care what any tool decided to call the drive.
+  local dev
+  udevadm settle --timeout=5 2>/dev/null || true
+  mkdir -p "$MEDIA_MOUNTPOINT"
+  for dev in $(lsblk -rno NAME,TYPE 2>/dev/null | awk '$2=="part"{print "/dev/"$1}'); do
+    mount | grep -q "^$dev " && continue
+    if mount -o ro "$dev" "$MEDIA_MOUNTPOINT" 2>/dev/null; then
+      if is_our_autorun_folder "$MEDIA_MOUNTPOINT/autorun"; then
+        echo "$MEDIA_MOUNTPOINT/autorun"
+        return 0
+      fi
+      umount "$MEDIA_MOUNTPOINT" 2>/dev/null
+    fi
+  done
+  return 1
+}
+
+HERE="$(find_media_root)"
+if [ -z "${HERE:-}" ]; then
+  HERE="$(scan_all_partitions)"
+fi
+if [ -z "${HERE:-}" ]; then
+  clear
+  echo "popup-nas: couldn't find its own autorun folder on any partition on this machine."
+  echo ""
+  echo "Partitions this machine can see right now:"
+  echo ""
+  lsblk -o NAME,LABEL,FSTYPE,SIZE,MOUNTPOINT 2>/dev/null
+  echo ""
+  echo "blkid output:"
+  blkid 2>/dev/null
+  echo ""
+  exec bash
+fi
+export HERE
+LIB="$HERE/lib"
+
+# shellcheck source=lib/network.sh
+source "$LIB/network.sh"
+# shellcheck source=lib/selfupdate.sh
+source "$LIB/selfupdate.sh"
+# shellcheck source=lib/partition.sh
+source "$LIB/partition.sh"
+# shellcheck source=lib/samba.sh
+source "$LIB/samba.sh"
+# shellcheck source=lib/fleet.sh
+source "$LIB/fleet.sh"
+# shellcheck source=lib/populate.sh
+source "$LIB/populate.sh"
+# shellcheck source=lib/display.sh
+source "$LIB/display.sh"
+# shellcheck source=lib/build.sh
+source "$LIB/build.sh"
+# shellcheck source=lib/menu.sh
+source "$LIB/menu.sh"
+
+# Per-site config baked onto the stick alongside this script.
+CONF="$HERE/popup-nas.conf"
+if [ -f "$CONF" ]; then
+  # shellcheck disable=SC1090
+  source "$CONF"
+fi
+
+clear
+echo "=== popup-nas ==="
+echo ""
+wait_for_network
+self_update
+
+HOSTNAME_VALUE=$(ask_hostname)
+hostnamectl set-hostname "$HOSTNAME_VALUE" 2>/dev/null || true
+
+start_fleet_broadcast "$HOSTNAME_VALUE"
+
+main_menu "$HOSTNAME_VALUE"

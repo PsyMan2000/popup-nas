@@ -1,0 +1,25 @@
+# Per-site defaults for popup-nas, baked onto the stick alongside autorun/.
+# Copy this to popup-nas.conf (same folder) and edit before duplicating sticks.
+#
+# IMPORTANT: this file (including the password) ends up on every duplicated
+# stick. Use a dedicated, READ-ONLY NAS account here, never an admin credential.
+
+MASTER_IMAGE_SMB_PATH="//nas-server/masterimages"
+MASTER_IMAGE_USER="popup-nas-readonly"
+MASTER_IMAGE_PASS="changeme"
+
+# Used by the menu's "Make more sticks" build options (autorun/lib/build.sh)
+# to know which stock SystemRescue ISO to download. Must match this stick's
+# own SystemRescue version - check the boot label (e.g. RESCUE1302 =
+# version 13.02) - and needs updating here whenever the stock image this
+# stick is built from is upgraded. If left unset, build.sh falls back to
+# the version it was last confirmed working against.
+#SYSRESCUE_ISO_URL="https://fastly-cdn.system-rescue.org/releases/13.02/systemrescue-13.02-amd64.iso"
+
+# Used by self_update() (autorun/lib/selfupdate.sh) to know where to pull
+# the latest version of popup-nas itself from, on every boot. Only
+# override these if you're running your own fork/mirror of this repo -
+# normally leave them unset and the stick uses this repo's own "stable"
+# branch.
+#UPDATE_REPO_URL="https://github.com/PsyMan2000/popup-nas.git"
+#UPDATE_BRANCH="stable"

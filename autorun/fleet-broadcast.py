@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Tiny UDP broadcast + listener so every popup-nas box on the same LAN
+segment can see the others (the "fleet"). Broadcast traffic doesn't cross a
+router/VLAN boundary - this only shows peers on the same physical network
+segment, which is the normal case for a single-site imaging event.
+"""
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import threading
+import time
+
+hostname, port, share_mount, state_path = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+
+
+def my_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return "0.0.0.0"
+    finally:
+        s.close()
+
+
+def free_gb():
+    try:
+        return round(shutil.disk_usage(share_mount).free / 1e9, 1)
+    except OSError:
+        return None
+
+
+def connection_count():
+    # Established TCP connections where WE are listening on port 445 (the
+    # SMB port) - i.e. how many machines currently have this box's share
+    # open. Matches the bash-side smb_connection_count() helper.
+    try:
+        out = subprocess.run(
+            ["ss", "-tn", "state", "established", "( sport = :445 )"],
+            capture_output=True, text=True, timeout=2,
+        ).stdout.splitlines()
+        return max(len(out) - 1, 0)  # first line is ss's own header
+    except Exception:
+        return 0
+
+
+def broadcaster():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    while True:
+        msg = json.dumps({
+            "name": hostname,
+            "ip": my_ip(),
+            "free_gb": free_gb(),
+            "connections": connection_count(),
+            "ts": time.time(),
+        })
+        try:
+            sock.sendto(msg.encode(), ("255.255.255.255", port))
+        except OSError:
+            pass
+        time.sleep(5)
+
+
+def listener():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("", port))
+    peers = {}
+    while True:
+        try:
+            data, addr = sock.recvfrom(2048)
+            msg = json.loads(data.decode())
+        except (OSError, ValueError, KeyError):
+            continue
+        name = msg.get("name")
+        if not name or name == hostname:
+            continue
+        peers[name] = {
+            "ip": msg.get("ip", addr[0]),
+            "free_gb": msg.get("free_gb"),
+            "connections": msg.get("connections", 0),
+            "seen": time.time(),
+        }
+        peers = {k: v for k, v in peers.items() if time.time() - v["seen"] < 60}
+        tmp = state_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(peers, f)
+        os.replace(tmp, state_path)
+
+
+threading.Thread(target=broadcaster, daemon=True).start()
+listener()

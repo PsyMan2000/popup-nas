@@ -1,0 +1,10 @@
+# Real per-site config, copied from popup-nas.conf.example and filled in
+# with actual NAS credentials - never commit this.
+autorun/popup-nas.conf
+
+# The built SRM module is a local binary artifact, not source.
+*.srm
+
+# Common OS/editor noise
+.DS_Store
+Thumbs.db
