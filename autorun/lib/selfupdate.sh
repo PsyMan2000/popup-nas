@@ -104,6 +104,23 @@ self_update() {
     return 0
   fi
 
+  # The boot media this repo lives on is normally FAT/exFAT (deliberately
+  # - so it works with any PC's BIOS/UEFI and can be written from Windows
+  # too), and FAT can't store real Unix file permissions at all. Mounted
+  # under Linux, every file's permission bits come out as whatever the
+  # mount's own default is, not whatever was actually committed to git -
+  # so git sees a permission-only difference on nearly every tracked file
+  # and calls it a "local modification", which blocks the fast-forward
+  # merge below even though not one byte of real content has changed.
+  # Confirmed on real hardware 2026-10-02: this alone silently stopped
+  # self-update (and the "Pull latest update now" menu item) from ever
+  # applying a real, available update, while still reporting "already up
+  # to date" - because that's genuinely what git itself was reporting as
+  # the merge's failure reason. Telling git to ignore file mode entirely
+  # is the standard fix for a checkout living on FAT/exFAT/NTFS, and is
+  # safe and cheap to (re-)apply on every single run.
+  git -C "$repo_root" config core.fileMode false
+
   before=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo "")
   if ! GIT_TERMINAL_PROMPT=0 timeout 10 git -C "$repo_root" fetch --quiet origin "$(update_repo_branch)" >/tmp/popup-update.log 2>&1; then
     echo " couldn't reach $(update_repo_url) - continuing with what's already on this stick."
