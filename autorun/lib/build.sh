@@ -53,6 +53,49 @@ find_srm() {
   find "$root" -maxdepth 3 -iname 'popup-nas.srm' 2>/dev/null | head -n1
 }
 
+# Finds SystemRescue's official USB writer (a single .AppImage file) - the
+# tool make_new_stick() uses to write a new stick. Looked for, in order:
+#   1. SYSRESCUE_USBWRITER_PATH from popup-nas.conf, if set and present
+#   2. the build cache (e.g. just downloaded there by hand with curl)
+#   3. this stick's own sysresccd/ folder, then its root - the best place
+#      to keep it, since make_new_stick() also copies it onto every new
+#      stick it makes, so a cloned stick can clone further sticks too
+#   4. SYSRESCUE_USBWRITER_URL from popup-nas.conf, downloaded into the
+#      build cache
+# The writer's version must match the SystemRescue version being written
+# (the tool checks this itself and refuses to run on a mismatch). This
+# isn't hardcoded to a download URL on purpose: the right file depends on
+# the SystemRescue release, and a wrong guess would silently fail.
+# Echoes the path and returns 0 if found, returns 1 if not.
+find_usbwriter() {
+  local root="$1" dir found dest
+  if [ -n "${SYSRESCUE_USBWRITER_PATH:-}" ] && [ -f "$SYSRESCUE_USBWRITER_PATH" ]; then
+    echo "$SYSRESCUE_USBWRITER_PATH"
+    return 0
+  fi
+  for dir in "$BUILD_CACHE" "$root/sysresccd" "$root"; do
+    [ -d "$dir" ] || continue
+    found=$(find "$dir" -maxdepth 1 -iname '*usbwriter*.AppImage' 2>/dev/null | head -n1)
+    if [ -n "$found" ]; then
+      echo "$found"
+      return 0
+    fi
+  done
+  if [ -n "${SYSRESCUE_USBWRITER_URL:-}" ]; then
+    mkdir -p "$BUILD_CACHE"
+    dest="$BUILD_CACHE/sysrescueusbwriter.AppImage"
+    # >&2: this function's stdout is captured by its caller (see
+    # ensure_source_iso for the same gotcha).
+    whiptail --infobox "Downloading SystemRescue's USB writer..." 8 60 >&2
+    if curl -fL -o "$dest" "$SYSRESCUE_USBWRITER_URL" 2>"$BUILD_CACHE/usbwriter-download.log"; then
+      echo "$dest"
+      return 0
+    fi
+    rm -f "$dest"
+  fi
+  return 1
+}
+
 # Downloads the stock SystemRescue ISO once per boot session and caches it
 # (the OS is RAM-only, so this doesn't persist across a reboot, but that's
 # fine - rebuilding more than once in the same session shouldn't re-fetch a
@@ -87,6 +130,35 @@ boot_disk() {
   src=$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null) || return 1
   part=$(basename "$src")
   lsblk -no PKNAME "/dev/$part" 2>/dev/null | head -n1
+}
+
+# After SystemRescue's USB writer has written $1 (a whole disk), works out
+# which partition on it is the writable boot filesystem our files belong
+# on. Prefers a partition whose label starts with RESCUE (the label
+# SystemRescue itself requires on its boot device, e.g. RESCUE1302);
+# failing that, the largest partition with a normal writable filesystem
+# type. Never goes by partition number or list position (see the
+# numbering gotcha in docs/architecture.md) - only by label and size.
+find_new_stick_partition() {
+  local disk="$1" p fs lab size best="" best_size=0
+  for p in $(lsblk -lnpo NAME,TYPE "$disk" 2>/dev/null | awk '$2=="part"{print $1}'); do
+    fs=$(blkid -s TYPE -o value "$p" 2>/dev/null)
+    lab=$(blkid -s LABEL -o value "$p" 2>/dev/null)
+    case "$fs" in
+      vfat|exfat|ext4|ext3|ext2|ntfs) ;;
+      *) continue ;;
+    esac
+    case "$lab" in
+      RESCUE*) echo "$p"; return 0 ;;
+    esac
+    size=$(lsblk -bndo SIZE "$p" 2>/dev/null)
+    if [ "${size:-0}" -gt "$best_size" ]; then
+      best="$p"
+      best_size="$size"
+    fi
+  done
+  [ -n "$best" ] && { echo "$best"; return 0; }
+  return 1
 }
 
 # Fills $dest_dir with a working autorun/ + sysrescue.d/ pair, for either
@@ -172,8 +244,32 @@ build_popup_iso() {
   fi
 }
 
+# Writes a brand new popup-nas stick onto a spare disk.
+#
+# HISTORY - why this does NOT use dd (found on real hardware 2026-10-04):
+# this used to dd the stock ISO onto the disk and then add a second ext4
+# partition (POPUPDATA) holding autorun/, sysrescue.d/ and the SRM. That
+# stick booted to plain SystemRescue, not popup-nas. SystemRescue only
+# looks for autorun/ and sysrescue.d/ at the root of its BOOT DEVICE
+# filesystem (the one it booted from) - never on any other partition -
+# and a dd'd ISO's boot filesystem is read-only, so our files could only
+# ever sit somewhere SystemRescue never looks. SystemRescue's own docs
+# say dd-style writing can't carry extra files, and recommend their USB
+# writer (or Rufus on Windows), both of which make a WRITABLE boot
+# filesystem. (autorun0's own partition scan doesn't help here: that only
+# finds our files once autorun0 is already running, but SystemRescue has
+# to find autorun/ first in order to launch it.) The earlier dd-era
+# lessons - never trust the partition table for where ISO content ends,
+# never pick a partition by list position - no longer apply, since
+# nothing here partitions by hand any more.
+#
+# Now: SystemRescue's own USB writer writes the stick, then autorun/,
+# sysrescue.d/, .git and popup-nas.srm go at the ROOT of the filesystem
+# it created - the same layout a Rufus ISO-Image-mode stick has, which is
+# known to boot into popup-nas.
 make_new_stick() {
-  local root srm src_iso exclude_disk disk confirm data_part mnt
+  local root srm usbwriter src_iso exclude_disk disk confirm data_part mnt
+  local iso_mb avail_mb uw tmp_unpack rc p lab_now
   local args=()
 
   root=$(find_boot_media_root) || {
@@ -186,7 +282,25 @@ make_new_stick() {
     return
   }
 
+  # Checked up front, before anything is erased.
+  usbwriter=$(find_usbwriter "$root") || {
+    whiptail --msgbox "This needs SystemRescue's official USB writer (one .AppImage file), and it isn't on this box yet. Nothing has been touched.\n\nGet the one matching your SystemRescue version (e.g. 13.02) from:\nhttps://gitlab.com/systemrescue/systemrescue-usbwriter/-/releases\n\nThen EITHER put the file in the sysresccd folder on this stick (best), OR set SYSRESCUE_USBWRITER_URL in popup-nas.conf, OR download it into $BUILD_CACHE/ with curl." 20 78
+    return
+  }
+
   src_iso=$(ensure_source_iso) || return
+
+  # The writer unpacks the whole ISO into a temporary folder first, so the
+  # place that folder lives needs about an ISO's worth of room (plus
+  # slack for the unpacked writer itself). On this RAM-only OS that folder
+  # is in memory - fail now, with nothing erased, rather than part way.
+  iso_mb=$(( $(stat -c %s "$src_iso" 2>/dev/null || echo 0) / 1048576 ))
+  avail_mb=$(df -Pm "$BUILD_CACHE" 2>/dev/null | awk 'NR==2{print $4}')
+  if [ -z "$avail_mb" ] || [ "$avail_mb" -lt $(( iso_mb + 500 )) ]; then
+    whiptail --msgbox "Not enough free working space for the USB writer: it needs about $(( iso_mb + 500 ))MB free in $BUILD_CACHE but only ${avail_mb:-0}MB is available. This box probably doesn't have enough RAM free for this. Nothing has been touched." 12 76
+    return
+  fi
+
   exclude_disk=$(boot_disk)
 
   while read -r name size model; do
@@ -205,106 +319,43 @@ make_new_stick() {
   confirm=$(whiptail --inputbox "Type the device path again to confirm ($disk):" 10 70 3>&1 1>&2 2>&3) || return
   [ "$confirm" = "$disk" ] || { whiptail --msgbox "Confirmation didn't match - nothing was touched." 10 60; return; }
 
+  # Make sure nothing on the target is mounted before it gets rewritten.
+  for p in $(lsblk -lnpo NAME "$disk" 2>/dev/null | tac); do
+    umount "$p" 2>/dev/null || true
+  done
+
+  # Run a copy of the writer from the build cache: the stick it may be
+  # stored on is FAT, which is often mounted noexec. Extract-and-run mode
+  # means it doesn't need FUSE (which this live system may not have).
+  mkdir -p "$BUILD_CACHE"
+  uw="$BUILD_CACHE/usbwriter-run.AppImage"
+  [ "$usbwriter" -ef "$uw" ] || cp -f "$usbwriter" "$uw"
+  chmod +x "$uw"
+  tmp_unpack="$BUILD_CACHE/usbwriter-tmp"
+  rm -rf "$tmp_unpack"
+  mkdir -p "$tmp_unpack"
+
   clear
-  echo "Writing $src_iso to $disk ..."
-  if ! dd if="$src_iso" of="$disk" bs=4M status=progress conv=fsync; then
-    whiptail --msgbox "Writing the ISO to $disk failed partway through - that disk is now in an unknown state, don't trust it." 10 74
+  echo "Writing $src_iso to $disk with SystemRescue's USB writer ..."
+  echo "(It may ask you to confirm - answer yes if so. Messages stay on screen if it fails.)"
+  echo ""
+  # Run directly on the terminal (not piped) so any prompt it shows works.
+  APPIMAGE_EXTRACT_AND_RUN=1 TMPDIR="$tmp_unpack" "$uw" --cli --targetdev="$disk" --tmpdir="$tmp_unpack" "$src_iso"
+  rc=$?
+  rm -rf "$tmp_unpack"
+  if [ "$rc" -ne 0 ]; then
+    whiptail --msgbox "SystemRescue's USB writer reported a problem (exit code $rc) - scroll back up in the shell output to see why. $disk is now in an unknown state, don't trust it. (A version mismatch between the writer and the ISO is the most likely cause - they must be the same SystemRescue version.)" 14 78
     return
   fi
   sync
   partprobe "$disk" 2>/dev/null || true
   sleep 2
 
-  # dd'ing the ISO also copies its existing partition table as-is, which
-  # still describes the ISO's own small original size, not whatever's
-  # actually available on this physical stick. On a GPT-labelled ISO,
-  # sgdisk -e fixes that up by relocating the backup GPT structures to the
-  # disk's real end - but SystemRescue's hybrid ISO has turned out to use
-  # a plain old-style MBR (msdos) table instead on the hardware tested so
-  # far, confirmed 2026-10-02 ('Partition Table: msdos' in parted's
-  # output), for which there's no equivalent stale-header problem - MBR
-  # doesn't store a separate backup copy the way GPT does. This call is
-  # still harmless to leave in (sgdisk simply logs "Invalid partition
-  # data!" and does nothing on an MBR disk) in case some build of the ISO
-  # ever does use GPT instead.
-  sgdisk -e "$disk" >/tmp/popup-stick-gpt-fix.log 2>&1 || true
-  partprobe "$disk" 2>/dev/null || true
-  sleep 1
-
-  # IMPORTANT, found on real hardware 2026-10-02: SystemRescue's hybrid
-  # ISO doesn't put its actual OS content (kernel, airootfs squashfs,
-  # GRUB's own menu/config) in a normal partition at all - the whole
-  # ISO9660 filesystem just starts at the very beginning of the disk and
-  # is read directly, with only a tiny EFI System Partition (a megabyte
-  # or so, for UEFI booting) showing up as a real entry in the partition
-  # table. That means the partition table can NEVER be trusted to say
-  # where the ISO's real content ends - reading it back (as this used to)
-  # found only that tiny EFI partition and concluded free space started
-  # right after it, at ~1.5MiB in. Formatting a new partition there
-  # landed it WITHIN the live ISO content rather than past it, destroying
-  # enough of it (GRUB's menu/config and/or the kernel) that a stick
-  # built that way wrote and reported success, but only ever reached a
-  # bare "grub>" prompt on boot - confirmed by a real boot test.
-  #
-  # The one number that can always be trusted instead is the exact byte
-  # size of the ISO file $src_iso that was just dd'd onto this disk - dd
-  # copied precisely that many bytes starting at the very start of the
-  # disk and touched nothing beyond it, regardless of what any partition
-  # table does or doesn't claim. Starting the new partition comfortably
-  # past that point (rounded up, plus a spare megabyte of margin) is
-  # always safe.
-  #
-  # Rather than growing the ISO's own content or its tiny EFI partition
-  # in place (risks corrupting boot files actually needed to boot at
-  # all), this creates a brand new partition in the stick's genuinely
-  # free remaining space purely to hold autorun/sysrescue.d/popup-nas.srm.
-  # autorun0 finds its own files by scanning every partition's actual
-  # content (see find_boot_media_root and the real-hardware gotcha it's
-  # built for), not by any fixed partition number or label, so a new
-  # partition works exactly the same as the first one for this.
-  local src_size_bytes src_end_mib part_end new_part_mb
-  src_size_bytes=$(stat -c %s "$src_iso" 2>/dev/null)
-  if [ -z "$src_size_bytes" ]; then
-    whiptail --msgbox "Wrote $disk's boot image, but couldn't read $src_iso's size back to work out where it safely ends on the disk, so nothing further was touched. Don't add a data partition to this stick by hand without checking 'stat $src_iso' first." 12 78
-    return
-  fi
-  # Round the ISO's exact byte size up to the next whole MiB, then add
-  # one more MiB of margin on top - cheap insurance against any rounding
-  # difference between the file's exact size and how it actually landed
-  # on the disk.
-  src_end_mib=$(( (src_size_bytes + 1048575) / 1048576 + 1 ))
-  part_end="${src_end_mib}MiB"
-  if ! parted -s "$disk" mkpart primary ext4 "$part_end" 100% 2>/tmp/popup-stick-part.log; then
-    whiptail --msgbox "Wrote $disk's boot image, but couldn't create a second partition in its remaining free space for autorun/sysrescue.d/SRM - this stick may be too small overall. See /tmp/popup-stick-part.log." 12 78
-    return
-  fi
-  partprobe "$disk" 2>/dev/null || true
-  sleep 2
-
-  # Picking the partition by "whichever one lsblk lists last" assumed a
-  # brand new partition always gets the highest number - wrong on real
-  # hardware, 2026-10-02: a stick whose only existing partition was
-  # numbered 2 (the small EFI partition near the very start) left number
-  # 1 free, so the new partition created just above took number 1 instead
-  # - putting it FIRST in lsblk's output (which lists by number, not by
-  # physical position on the disk or by size), with the small original
-  # partition coming last. That picked the wrong, tiny partition. Picking
-  # the LARGEST partition on the disk instead is reliable regardless of
-  # numbering, since this new partition always uses the stick's entire
-  # remaining free space and will dwarf any small boot/EFI partition
-  # already there.
-  data_part=$(lsblk -brno NAME,TYPE,SIZE "$disk" | awk '$2=="part"{print $3, $1}' | sort -n | tail -n1 | awk '{print "/dev/"$2}')
+  data_part=$(find_new_stick_partition "$disk")
   if [ -z "$data_part" ] || [ ! -b "$data_part" ]; then
-    whiptail --msgbox "Wrote $disk's boot image, but couldn't work out which partition on it is the new one just created. Check 'lsblk -b $disk' from a shell." 12 78
+    whiptail --msgbox "The USB writer finished, but I couldn't find a writable boot partition on $disk to add popup-nas's files to. Check 'lsblk -f $disk' from a shell - this stick will boot as plain SystemRescue until fixed." 12 78
     return
   fi
-  new_part_mb=$(lsblk -bno SIZE "$data_part" 2>/dev/null | awk '{print int($1/1024/1024)}')
-  if [ -z "$new_part_mb" ] || [ "$new_part_mb" -lt 100 ]; then
-    whiptail --msgbox "Wrote $disk's boot image, but only found ${new_part_mb:-0}MB free to use for autorun/sysrescue.d/SRM - this stick is too small overall for this to work. Try a bigger stick." 12 78
-    return
-  fi
-
-  mkfs.ext4 -F -L POPUPDATA "$data_part" >/tmp/popup-stick-mkfs.log 2>&1
 
   mnt=$(mktemp -d)
   local mount_tries=0 mounted=0
@@ -318,23 +369,64 @@ make_new_stick() {
   done
   if [ "$mounted" -ne 1 ]; then
     rmdir "$mnt" 2>/dev/null
-    whiptail --msgbox "Wrote the ISO to $disk, but couldn't mount its data partition ($data_part) after several tries to copy autorun/sysrescue.d/SRM onto - it may need longer to settle after writing on this particular stick. See /tmp/popup-stick-mount.log, or try 'mount $data_part /mnt' by hand from a shell." 12 78
+    whiptail --msgbox "The USB writer finished, but I couldn't mount $data_part to add popup-nas's files after several tries. See /tmp/popup-stick-mount.log, or try 'mount $data_part /mnt' by hand from a shell." 12 78
     return
   fi
-  echo "Mounted $data_part: $(df -h --output=avail "$mnt" 2>/dev/null | tail -n1 | tr -d ' ') free for autorun/sysrescue.d/SRM."
+  if ! touch "$mnt/.popup-write-test" 2>/dev/null; then
+    umount "$mnt" 2>/dev/null
+    rmdir "$mnt" 2>/dev/null
+    whiptail --msgbox "The boot partition ($data_part) on the new stick is READ-ONLY, so popup-nas's files can't be added to it. That's the same problem a plain dd stick has - this stick will boot as plain SystemRescue." 12 78
+    return
+  fi
+  rm -f "$mnt/.popup-write-test"
+  echo "Mounted $data_part: $(df -h --output=avail "$mnt" 2>/dev/null | tail -n1 | tr -d ' ') free."
 
   echo "Getting the latest popup-nas files ready..."
   stage_update_source "$root" "$mnt"
+  # This stick is FAT/exFAT, which can't hold real Unix permissions - same
+  # reason self_update() sets this on every boot; set it now so a stick
+  # never starts out looking 'modified' to git.
+  git -C "$mnt" config core.fileMode false 2>/dev/null || true
   mkdir -p "$mnt/sysresccd"
   if ! cp "$srm" "$mnt/sysresccd/"; then
     umount "$mnt" 2>/dev/null
     rmdir "$mnt" 2>/dev/null
-    whiptail --msgbox "Wrote $disk's boot image and data partition, but ran out of room while copying popup-nas.srm onto it ($data_part) - check 'df -h' and 'lsblk $disk' from a shell before trusting this stick." 12 78
+    whiptail --msgbox "Wrote the new stick, but ran out of room while copying popup-nas.srm onto it ($data_part) - check 'df -h' and 'lsblk $disk' from a shell before trusting this stick." 12 78
     return
   fi
+  # Best-effort: keep a copy of the USB writer on the new stick too, so it
+  # can make further sticks itself.
+  cp -f "$usbwriter" "$mnt/sysresccd/" 2>/dev/null || true
+  sync
+
+  # Check the result against what SystemRescue actually needs to find at
+  # the root of the boot filesystem, instead of just saying Done.
+  local ok=1 report="" spec flag rest rel desc
+  for spec in \
+    "-f|autorun/autorun0|autorun/autorun0 (our menu script)" \
+    "-f|sysrescue.d/200-popup-nas.yaml|sysrescue.d settings (copytoram, SRM, SSH key)" \
+    "-d|.git|.git folder (needed for self-update)" \
+    "-f|sysresccd/popup-nas.srm|popup-nas.srm module (Samba, git)"; do
+    flag="${spec%%|*}"; rest="${spec#*|}"; rel="${rest%%|*}"; desc="${rest#*|}"
+    if [ "$flag" "$mnt/$rel" ]; then
+      report="${report}  OK       $desc\n"
+    else
+      report="${report}  MISSING  $desc\n"
+      ok=0
+    fi
+  done
+  lab_now=$(blkid -s LABEL -o value "$data_part" 2>/dev/null)
+  case "$lab_now" in
+    RESCUE*) report="${report}  OK       drive label ${lab_now}\n" ;;
+    *) report="${report}  WRONG    drive label '${lab_now:-none}' (SystemRescue needs RESCUExxxx)\n"; ok=0 ;;
+  esac
 
   umount "$mnt"
   rmdir "$mnt"
 
-  whiptail --msgbox "Done - $disk is now a ready-to-boot popup-nas stick. Boot-test it before relying on it." 10 70
+  if [ "$ok" -eq 1 ]; then
+    whiptail --msgbox "Done - $disk is now a popup-nas stick.\n\n${report}\nBoot-test it before relying on it (it should reach the popup-nas menu, not plain SystemRescue)." 18 78
+  else
+    whiptail --msgbox "$disk was written, but it is NOT ready:\n\n${report}\nDon't rely on this stick." 18 78
+  fi
 }

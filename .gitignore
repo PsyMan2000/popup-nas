@@ -5,6 +5,9 @@ autorun/popup-nas.conf
 # The built SRM module is a local binary artifact, not source.
 *.srm
 
+# SystemRescue's official USB writer is a downloaded binary, not source.
+*.AppImage
+
 # Common OS/editor noise
 .DS_Store
 Thumbs.db

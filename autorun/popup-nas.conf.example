@@ -16,6 +16,17 @@ MASTER_IMAGE_PASS="changeme"
 # the version it was last confirmed working against.
 #SYSRESCUE_ISO_URL="https://fastly-cdn.system-rescue.org/releases/13.02/systemrescue-13.02-amd64.iso"
 
+# Used by "Make more sticks" -> "Clone this stick straight onto a new USB
+# drive" (autorun/lib/build.sh). That option writes the new stick with
+# SystemRescue's official USB writer (an .AppImage file), because plain dd
+# can't make a stick SystemRescue will load our autorun/ from. The writer
+# version must match the SystemRescue version (e.g. 13.02). Download it from
+# https://gitlab.com/systemrescue/systemrescue-usbwriter/-/releases and
+# either keep the file in this stick's sysresccd/ folder (best - it is then
+# copied onto every new stick too), or set ONE of these:
+#SYSRESCUE_USBWRITER_PATH="/path/to/sysrescueusbwriter-x86_64.AppImage"
+#SYSRESCUE_USBWRITER_URL="https://example.invalid/paste-the-release-asset-link-here"
+
 # Used by self_update() (autorun/lib/selfupdate.sh) to know where to pull
 # the latest version of popup-nas itself from, on every boot. Only
 # override these if you're running your own fork/mirror of this repo -
