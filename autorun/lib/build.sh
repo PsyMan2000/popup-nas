@@ -203,7 +203,7 @@ stage_update_source() {
 }
 
 build_popup_iso() {
-  local root srm src_iso dest_dir dest_iso free_mb recipe_dir default_dest
+  local root srm src_iso dest_dir dest_iso free_mb recipe_dir default_dest log rc reason
 
   root=$(find_boot_media_root) || {
     whiptail --msgbox "Couldn't find this stick's own autorun/sysrescue.d folders - can't build from here." 10 70
@@ -249,12 +249,34 @@ build_popup_iso() {
   cp "$srm" "$recipe_dir/iso_add/sysresccd/popup-nas.srm"
 
   echo "Building $dest_iso ..."
-  if sysrescue-customize --auto --source="$src_iso" --dest="$dest_iso" --recipe-dir="$recipe_dir" --overwrite; then
-    rm -rf "$recipe_dir"
+  # Everything sysrescue-customize prints is also saved in a log file, with a
+  # short header of facts about this box. Found on real hardware 2026-10-05:
+  # a build that failed from the monitor menu left only "scroll back up to
+  # see the error", but the screen had already been cleared, so the reason
+  # was lost. Now the last lines of the log are shown in the failure box
+  # itself and the full log is kept for later.
+  log="$BUILD_CACHE/iso-build.log"
+  mkdir -p "$BUILD_CACHE"
+  {
+    echo "=== popup-nas ISO build $(date) ==="
+    echo "cwd: $PWD  HOME: ${HOME:-<unset>}  TMPDIR: ${TMPDIR:-<unset>}"
+    echo "stdin: $(readlink /proc/$$/fd/0)  stdout: $(readlink /proc/$$/fd/1)"
+    echo "source ISO: $src_iso ($(du -h "$src_iso" 2>/dev/null | cut -f1))"
+    echo "recipe: $recipe_dir ($(du -sh "$recipe_dir/iso_add" 2>/dev/null | cut -f1) to add)"
+    df -h / /tmp "$dest_dir" "$BUILD_CACHE" 2>&1
+    free -m 2>&1
+    echo "=== sysrescue-customize output ==="
+  } > "$log" 2>&1
+  sysrescue-customize --auto --source="$src_iso" --dest="$dest_iso" --recipe-dir="$recipe_dir" --overwrite 2>&1 | tee -a "$log"
+  rc=${PIPESTATUS[0]}
+  rm -rf "$recipe_dir"
+  if [ "$rc" -eq 0 ]; then
     whiptail --msgbox "Done: $dest_iso\n\nBoot-test this in a VM before trusting it, same as any other build of this." 12 76
   else
-    rm -rf "$recipe_dir"
-    whiptail --msgbox "sysrescue-customize failed - scroll back up in the shell output to see the error." 10 72
+    # Long lines are wrapped (not cut) so the end of the error - the part
+    # that says what went wrong - is never lost.
+    reason=$(sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$log" | grep -a -v '^[[:space:]]*$' | tail -8 | fold -s -w 72 | tail -12)
+    whiptail --msgbox "sysrescue-customize failed (exit code $rc). Last lines of its output:\n\n$reason\n\nThe whole log is kept in:\n$log" 24 78
   fi
 }
 
