@@ -69,7 +69,12 @@ scan_all_partitions() {
   local dev
   udevadm settle --timeout=5 2>/dev/null || true
   mkdir -p "$MEDIA_MOUNTPOINT"
-  for dev in $(lsblk -rno NAME,TYPE 2>/dev/null | awk '$2=="part"{print "/dev/"$1}'); do
+  #
+  # "rom" (a CD/DVD drive, real or virtual) is tried as well as "part": an
+  # ISO booted in a VM shows up as /dev/sr0 of TYPE "rom", never as a
+  # partition, so a partitions-only search could never find our folder on
+  # it. Found 2026-10-05 booting a built popup-nas.iso in VirtualBox.
+  for dev in $(lsblk -rno NAME,TYPE 2>/dev/null | awk '$2=="part"||$2=="rom"{print "/dev/"$1}'); do
     mount | grep -q "^$dev " && continue
     if mount -o ro "$dev" "$MEDIA_MOUNTPOINT" 2>/dev/null; then
       if is_our_autorun_folder "$MEDIA_MOUNTPOINT/autorun"; then
