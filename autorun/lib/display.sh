@@ -33,6 +33,61 @@ channel_badge() {
   printf '\033[%sm UPDATE CHANNEL: %s \033[0m\n' "$style" "$label"
 }
 
+# Draws the coloured channel badge on the blank row just under the OK /
+# Cancel buttons of the main menu box, centred, so it's right in front of
+# whoever is looking at the menu even on a big monitor. whiptail itself
+# can only colour whole widget types, never one line of text inside a box,
+# so this paints that one line over the top AFTER whiptail has drawn the
+# menu. Started in the background by main_menu() just before whiptail runs
+# and killed as soon as whiptail returns.
+#
+# $1 = box width, $2 = box height (the same two numbers given to whiptail).
+# whiptail centres its box on screen: top = (rows - height) / 2, left =
+# (cols - width) / 2 (checked against real whiptail at many screen sizes).
+# The blank row is 2 rows above the box's bottom edge. The badge is
+# redrawn once a second so it comes back if the screen is ever repainted
+# (a resize, or a stray system message). Cursor position is saved and
+# restored around each draw so whiptail never notices.
+menu_badge_overlay() {
+  local box_w="$1" box_h="$2" info label colour style text len esc size rows cols row col
+  info=$(channel_info)
+  label="${info%|*}"
+  colour="${info##*|}"
+  case "$colour" in
+    green) style="1;30;42" ;;
+    amber) style="1;30;43" ;;
+    red)   style="1;97;41" ;;
+    *)     style="1;30;47" ;;
+  esac
+  text=" UPDATE CHANNEL: $label "
+  len=${#text}
+  esc=$(printf '\033')
+  sleep 0.3
+  while true; do
+    size=$(stty size <&2 2>/dev/null) || size=""
+    rows="${size% *}"
+    cols="${size#* }"
+    if [ -n "$rows" ] && [ "$rows" -ge "$box_h" ] 2>/dev/null && [ "$cols" -ge "$box_w" ] 2>/dev/null; then
+      row=$(( (rows - box_h) / 2 + box_h - 1 ))
+      col=$(( (cols - box_w) / 2 + (box_w - len) / 2 + 1 ))
+      [ "$col" -lt 1 ] && col=1
+      printf '%s7%s[%d;%dH%s[%sm%s%s[0m%s8' "$esc" "$esc" "$row" "$col" "$esc" "$style" "$text" "$esc" "$esc" >&2
+    fi
+    sleep 1
+  done
+}
+
+# True if the screen is big enough for the badge overlay above to fit
+# under the main menu box (so main_menu() knows whether it also needs the
+# plain top-left banner as a fallback). $1 = box width, $2 = box height.
+menu_badge_fits() {
+  local size rows cols
+  size=$(stty size <&2 2>/dev/null) || return 1
+  rows="${size% *}"
+  cols="${size#* }"
+  [ "$rows" -ge "$2" ] 2>/dev/null && [ "$cols" -ge "$1" ] 2>/dev/null
+}
+
 # The same colours for whiptail's top line (its --backtitle). whiptail
 # can't show ANSI codes, but NEWT_COLORS can colour that line. Echoes a
 # value for NEWT_COLORS; "amber" is whiptail's "yellow".
