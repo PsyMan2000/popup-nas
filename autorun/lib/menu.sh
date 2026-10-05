@@ -18,15 +18,37 @@ build_submenu() {
   done
 }
 
+# Used by menu items 8 and 9, which genuinely need the stick (8 copies
+# from it, 9 writes updates onto it). Returns 0 if the stick is there; if
+# not, explains and returns 1 so the caller skips the action.
+need_stick() {
+  stick_present && return 0
+  whiptail --msgbox "This option needs the stick, and the stick can't be read right now - it looks like it has been taken out.
+
+Plug it back in and reboot (option 6) to use this one.
+
+Options 1 to 7 don't need the stick and carry on working." 14 70
+  return 1
+}
+
 main_menu() {
   local hostname_value="$1"
-  local choice version channel_text newt_colors badge_pid backtitle badge_dev
+  local choice version channel_text newt_colors badge_pid backtitle badge_dev default_item=1
   local box_w=78 box_h=21
-  # Computed once per session, not per loop - popup_version() only ever
-  # changes via self_update(), and that restarts this whole script fresh
-  # anyway (see exec bash "$HERE/autorun0" in lib/selfupdate.sh), so this
-  # loop never needs to re-read it.
-  version=$(popup_version)
+  # Boot-time snapshot of the things read from the stick's git checkout
+  # (version, commit, update channel). Taken once here, while the stick is
+  # certainly still in, and reused by the badge and status screen, so that
+  # pulling the stick out later (options 1-7 don't need it) doesn't change
+  # them - e.g. to a grey "NO GIT". main_menu() is also what a self-update
+  # restarts, so a new version always takes a fresh snapshot. The "unset"
+  # makes the four lines below compute live instead of reusing an older
+  # snapshot.
+  unset POPUP_VERSION_CACHE CHANNEL_NAME_CACHE CHANNEL_INFO_CACHE POPUP_COMMIT_CACHE
+  POPUP_VERSION_CACHE=$(popup_version)
+  CHANNEL_NAME_CACHE=$(channel_name)
+  CHANNEL_INFO_CACHE=$(channel_info)
+  POPUP_COMMIT_CACHE=$(popup_commit)
+  version="$POPUP_VERSION_CACHE"
   # The update-channel banner (stable = green, stage = amber, anything
   # else = red; see channel_info in lib/selfupdate.sh). It is drawn as a
   # coloured line at the bottom centre of the menu box (menu_badge_overlay
@@ -44,7 +66,12 @@ main_menu() {
     else
       backtitle="$channel_text"
     fi
-    choice=$(NEWT_COLORS="$newt_colors" whiptail --backtitle "$backtitle" --title "popup-nas [$hostname_value] - $version" --menu "What do you want to do?" "$box_h" "$box_w" 9 \
+    # Items 1-7 work with the stick pulled out (the system runs from RAM
+    # and these only touch this PC's disk). 8 and 9 need the stick, so they
+    # sit under a separator line. The "-" row is just that line: choosing
+    # it does nothing (see the case below). Its text starts with a space on
+    # purpose: whiptail reads any text starting with "--" as an option.
+    choice=$(NEWT_COLORS="$newt_colors" whiptail --backtitle "$backtitle" --title "popup-nas [$hostname_value] - $version" --default-item "$default_item" --menu "What do you want to do?" "$box_h" "$box_w" 10 \
       "1" "Show status screen (hostname, IP, fleet)" \
       "2" "Set up the SMB share (shrink NTFS, or use a wiped disk whole)" \
       "3" "Fill the share with the master image" \
@@ -52,6 +79,7 @@ main_menu() {
       "5" "Drop to a shell" \
       "6" "Reboot" \
       "7" "Power off" \
+      "-" " ------ Leave the stick IN to use the two below ------" \
       "8" "Make more sticks (build an ISO, or clone to a new USB)" \
       "9" "Pull latest update now (no reboot needed)" 3>&1 1>&2 2>&3)
     local rc=$?
@@ -61,6 +89,7 @@ main_menu() {
     fi
     [ "$rc" -ne 0 ] && continue
 
+    default_item=1
     case "$choice" in
       1) status_screen "$hostname_value" ;;
       2) setup_share ;;
@@ -69,8 +98,9 @@ main_menu() {
       5) clear; echo "Type 'exit' to come back to this menu."; bash ;;
       6) reboot ;;
       7) poweroff ;;
-      8) build_submenu ;;
-      9) pull_update_now ;;
+      -) default_item=8 ;;
+      8) need_stick && build_submenu ;;
+      9) need_stick && pull_update_now ;;
     esac
   done
 }
