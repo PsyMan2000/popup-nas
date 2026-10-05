@@ -14,6 +14,15 @@ BUILD_CACHE="/root/.cache/popup-nas-build"
 # stock image gets upgraded.
 DEFAULT_SYSRESCUE_ISO_URL="https://fastly-cdn.system-rescue.org/releases/13.02/systemrescue-13.02-amd64.iso"
 
+# Fallback download link for SystemRescue's official USB writer (the file
+# make_new_stick() uses), used only if no copy is already on the stick or
+# in the build cache and SYSRESCUE_USBWRITER_URL isn't set in
+# popup-nas.conf. IMPORTANT: the writer's version must match the
+# SystemRescue ISO's version - when DEFAULT_SYSRESCUE_ISO_URL above is
+# upgraded, update this to the matching writer release at the same time
+# (list: https://gitlab.com/systemrescue/systemrescue-usbwriter/-/releases).
+DEFAULT_SYSRESCUE_USBWRITER_URL="https://fastly-cdn.system-rescue.org/download/usbwriter/1.1.1/sysrescueusbwriter-x86_64.AppImage"
+
 # Finds the root of the currently-booted medium (where autorun/,
 # sysrescue.d/ and popup-nas.srm live). Tries the normal archiso mount
 # point first (fast, and where it's been every time so far), falls back to
@@ -68,7 +77,7 @@ find_srm() {
 # the SystemRescue release, and a wrong guess would silently fail.
 # Echoes the path and returns 0 if found, returns 1 if not.
 find_usbwriter() {
-  local root="$1" dir found dest
+  local root="$1" dir found dest url
   if [ -n "${SYSRESCUE_USBWRITER_PATH:-}" ] && [ -f "$SYSRESCUE_USBWRITER_PATH" ]; then
     echo "$SYSRESCUE_USBWRITER_PATH"
     return 0
@@ -81,13 +90,18 @@ find_usbwriter() {
       return 0
     fi
   done
-  if [ -n "${SYSRESCUE_USBWRITER_URL:-}" ]; then
+  url="${SYSRESCUE_USBWRITER_URL:-$DEFAULT_SYSRESCUE_USBWRITER_URL}"
+  if [ -n "$url" ]; then
     mkdir -p "$BUILD_CACHE"
     dest="$BUILD_CACHE/sysrescueusbwriter.AppImage"
     # >&2: this function's stdout is captured by its caller (see
     # ensure_source_iso for the same gotcha).
     whiptail --infobox "Downloading SystemRescue's USB writer..." 8 60 >&2
-    if curl -fL -o "$dest" "$SYSRESCUE_USBWRITER_URL" 2>"$BUILD_CACHE/usbwriter-download.log"; then
+    # Only accept the download if it is a plausible AppImage (an ELF
+    # file) - a failed/redirected download can leave an HTML error page
+    # that would otherwise be run as if it were the writer.
+    if curl -fL -o "$dest" "$url" 2>"$BUILD_CACHE/usbwriter-download.log" \
+       && [ "$(head -c 4 "$dest" 2>/dev/null | tail -c 3)" = "ELF" ]; then
       echo "$dest"
       return 0
     fi
@@ -268,7 +282,7 @@ build_popup_iso() {
 # it created - the same layout a Rufus ISO-Image-mode stick has, which is
 # known to boot into popup-nas.
 make_new_stick() {
-  local root srm usbwriter src_iso exclude_disk disk confirm data_part mnt
+  local root srm usbwriter src_iso exclude_disk disk confirm data_part mnt sectors
   local iso_mb avail_mb uw tmp_unpack rc p lab_now
   local args=()
 
@@ -284,7 +298,7 @@ make_new_stick() {
 
   # Checked up front, before anything is erased.
   usbwriter=$(find_usbwriter "$root") || {
-    whiptail --msgbox "This needs SystemRescue's official USB writer (one .AppImage file), and it isn't on this box yet. Nothing has been touched.\n\nGet the one matching your SystemRescue version (e.g. 13.02) from:\nhttps://gitlab.com/systemrescue/systemrescue-usbwriter/-/releases\n\nThen EITHER put the file in the sysresccd folder on this stick (best), OR set SYSRESCUE_USBWRITER_URL in popup-nas.conf, OR download it into $BUILD_CACHE/ with curl." 20 78
+    whiptail --msgbox "This needs SystemRescue's official USB writer (one .AppImage file), and it isn't on this box yet. Nothing has been touched.\n\nGet the one matching your SystemRescue version (e.g. 13.02) from:\nhttps://gitlab.com/systemrescue/systemrescue-usbwriter/-/releases\n\nThe automatic download from the built-in link also failed (see $BUILD_CACHE/usbwriter-download.log). Either put the file in the sysresccd folder on this stick (best), OR set SYSRESCUE_USBWRITER_URL in popup-nas.conf, OR download it into $BUILD_CACHE/ with curl." 20 78
     return
   }
 
@@ -323,6 +337,29 @@ make_new_stick() {
   for p in $(lsblk -lnpo NAME "$disk" 2>/dev/null | tac); do
     umount "$p" 2>/dev/null || true
   done
+
+  # Wipe stale data off the target first. The USB writer only rewrites sector
+  # 0 and its own partition; anything left elsewhere on a REUSED stick (e.g.
+  # from a whole ISO that was dd'd to it earlier) can make Windows mark the
+  # new partition Offline, so the stick boots but gets no drive letter. Zero
+  # the first 64 MiB and the last 16 MiB (the same areas Rufus clears).
+  sectors=$(blockdev --getsz "$disk" 2>/dev/null || echo 0)
+  whiptail --infobox "Wiping old data from $disk ..." 8 60
+  wipefs -a "$disk" >/dev/null 2>&1 || true
+  if [ "$sectors" -le 131072 ]; then
+    whiptail --msgbox "$disk is too small to use (or its size couldn't be read). Nothing else was done." 10 70
+    return
+  fi
+  if ! dd if=/dev/zero of="$disk" bs=1M count=64 conv=fsync status=none 2>/dev/null; then
+    whiptail --msgbox "Couldn't write to the start of $disk (is it write-protected or failing?). Nothing else was done." 10 70
+    return
+  fi
+  if ! dd if=/dev/zero of="$disk" bs=512 seek=$((sectors - 32768)) count=32768 conv=fsync status=none 2>/dev/null; then
+    whiptail --msgbox "Couldn't write to the end of $disk (is it write-protected or failing?). Nothing else was done." 10 70
+    return
+  fi
+  sync
+  blockdev --rereadpt "$disk" 2>/dev/null || true
 
   # Run a copy of the writer from the build cache: the stick it may be
   # stored on is FAT, which is often mounted noexec. Extract-and-run mode
