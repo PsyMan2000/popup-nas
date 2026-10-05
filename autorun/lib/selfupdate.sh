@@ -1,4 +1,3 @@
-
 # Self-updating sticks: pull the latest "stable" version of popup-nas
 # straight from its public GitHub repo, right at boot, before anything else
 # runs. This is what replaces the old manual "git pull on your PC, then
