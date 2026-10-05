@@ -20,14 +20,19 @@ build_submenu() {
 
 main_menu() {
   local hostname_value="$1"
-  local choice version
+  local choice version channel_text newt_colors
   # Computed once per session, not per loop - popup_version() only ever
   # changes via self_update(), and that restarts this whole script fresh
   # anyway (see exec bash "$HERE/autorun0" in lib/selfupdate.sh), so this
   # loop never needs to re-read it.
   version=$(popup_version)
+  # Same for the update-channel banner on the top line (stable = green,
+  # stage = amber, anything else = red; see channel_info in
+  # lib/selfupdate.sh).
+  channel_text="UPDATE CHANNEL: $(channel_info | cut -d'|' -f1)"
+  newt_colors=$(channel_newt_colors)
   while true; do
-    choice=$(whiptail --title "popup-nas [$hostname_value] - $version" --menu "What do you want to do?" 21 78 9 \
+    choice=$(NEWT_COLORS="$newt_colors" whiptail --backtitle "$channel_text" --title "popup-nas [$hostname_value] - $version" --menu "What do you want to do?" 21 78 9 \
       "1" "Show status screen (hostname, IP, fleet)" \
       "2" "Set up the SMB share (shrink NTFS, or use a wiped disk whole)" \
       "3" "Fill the share with the master image" \
