@@ -202,8 +202,28 @@ stage_update_source() {
   cp -r "$root/sysrescue.d" "$dest/sysrescue.d"
 }
 
+# Where SystemRescue keeps its own tools (sysrescue-customize etc). An SSH
+# login has this folder on its PATH, but the menu that autorun0 runs at boot
+# does NOT (its PATH is only /usr/local/sbin:/usr/local/bin:/usr/bin), so
+# "sysrescue-customize" was "command not found" (exit code 127) when "Build an
+# ISO file" was chosen from the monitor menu, while the very same build worked
+# over SSH. Found on real hardware 2026-10-05 thanks to the build log.
+SYSRESCUE_BIN_DIR="${SYSRESCUE_BIN_DIR:-/usr/share/sysrescue/bin}"
+
+# Echoes the full path of sysrescue-customize: from PATH if it is there,
+# otherwise from SystemRescue's own tools folder. Returns 1 if not found.
+find_sysrescue_customize() {
+  local found
+  found=$(command -v sysrescue-customize 2>/dev/null)
+  if [ -z "$found" ] && [ -x "$SYSRESCUE_BIN_DIR/sysrescue-customize" ]; then
+    found="$SYSRESCUE_BIN_DIR/sysrescue-customize"
+  fi
+  [ -n "$found" ] || return 1
+  echo "$found"
+}
+
 build_popup_iso() {
-  local root srm src_iso dest_dir dest_iso free_mb recipe_dir default_dest log rc reason
+  local root srm src_iso dest_dir dest_iso free_mb recipe_dir default_dest log rc reason sc
 
   root=$(find_boot_media_root) || {
     whiptail --msgbox "Couldn't find this stick's own autorun/sysrescue.d folders - can't build from here." 10 70
@@ -212,6 +232,13 @@ build_popup_iso() {
   srm=$(find_srm "$root")
   [ -n "$srm" ] && [ -f "$srm" ] || {
     whiptail --msgbox "Couldn't find popup-nas.srm anywhere on this stick (checked $root/sysresccd/ and $root/ directly) - this stick doesn't have the SRM module baked in." 10 76
+    return
+  }
+
+  # Checked now, before the big source-ISO download, so a missing tool is
+  # reported straight away.
+  sc=$(find_sysrescue_customize) || {
+    whiptail --msgbox "Couldn't find sysrescue-customize (SystemRescue's own ISO builder) on this box - looked on the normal PATH and in $SYSRESCUE_BIN_DIR. Nothing has been built." 11 76
     return
   }
 
@@ -261,13 +288,15 @@ build_popup_iso() {
     echo "=== popup-nas ISO build $(date) ==="
     echo "cwd: $PWD  HOME: ${HOME:-<unset>}  TMPDIR: ${TMPDIR:-<unset>}"
     echo "stdin: $(readlink /proc/$$/fd/0)  stdout: $(readlink /proc/$$/fd/1)"
+    echo "builder: $sc"
+    echo "PATH: $PATH"
     echo "source ISO: $src_iso ($(du -h "$src_iso" 2>/dev/null | cut -f1))"
     echo "recipe: $recipe_dir ($(du -sh "$recipe_dir/iso_add" 2>/dev/null | cut -f1) to add)"
     df -h / /tmp "$dest_dir" "$BUILD_CACHE" 2>&1
     free -m 2>&1
     echo "=== sysrescue-customize output ==="
   } > "$log" 2>&1
-  sysrescue-customize --auto --source="$src_iso" --dest="$dest_iso" --recipe-dir="$recipe_dir" --overwrite 2>&1 | tee -a "$log"
+  PATH="$PATH:$SYSRESCUE_BIN_DIR" "$sc" --auto --source="$src_iso" --dest="$dest_iso" --recipe-dir="$recipe_dir" --overwrite 2>&1 | tee -a "$log"
   rc=${PIPESTATUS[0]}
   rm -rf "$recipe_dir"
   if [ "$rc" -eq 0 ]; then
