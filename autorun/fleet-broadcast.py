@@ -14,6 +14,9 @@ import threading
 import time
 
 hostname, port, share_mount, state_path, repo_root = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+# Which update channel (git branch) this box follows - optional 6th argument,
+# so an older autorun/fleet.sh that doesn't pass it still works.
+CHANNEL = sys.argv[6] if len(sys.argv) > 6 else "-"
 
 
 def my_ip():
@@ -79,6 +82,7 @@ def broadcaster():
             "free_gb": free_gb(),
             "connections": connection_count(),
             "version": VERSION,
+            "channel": CHANNEL,
             "ts": time.time(),
         })
         try:
@@ -107,6 +111,7 @@ def listener():
             "free_gb": msg.get("free_gb"),
             "connections": msg.get("connections", 0),
             "version": msg.get("version", "-"),
+            "channel": msg.get("channel", "-"),
             "seen": time.time(),
         }
         peers = {k: v for k, v in peers.items() if time.time() - v["seen"] < 60}

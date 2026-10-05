@@ -21,7 +21,7 @@ start_fleet_broadcast() {
   # duplicate row in the fleet table for what's really just one machine.
   # Confirmed on real hardware 2026-10-02.
   pkill -f "fleet-broadcast\.py" 2>/dev/null || true
-  python3 "$HERE/fleet-broadcast.py" "$hostname_value" "$FLEET_PORT" "$SHARE_MOUNT" "$FLEET_STATE" "$repo_root" >/tmp/popup-fleet.log 2>&1 &
+  python3 "$HERE/fleet-broadcast.py" "$hostname_value" "$FLEET_PORT" "$SHARE_MOUNT" "$FLEET_STATE" "$repo_root" "$(channel_name)" >/tmp/popup-fleet.log 2>&1 &
 }
 
 # Prints a boxed table of every popup-nas box seen on the network,
@@ -34,13 +34,15 @@ start_fleet_broadcast() {
 # unknown), $3 = this box's own free space as a ready-to-print string (e.g.
 # "420.3 GB", or "-" if no share is set up yet), $4 = this box's own
 # current SMB connection count, $5 = this box's own current git commit
-# short-hash (or "-" if this isn't a self-updating git checkout).
+# short-hash (or "-" if this isn't a self-updating git checkout), $6 = this
+# box's own update channel name (from channel_name; shown in the CHANNEL
+# column - boxes still running older code don't report one, shown as "-").
 fleet_table() {
-  local self_name="$1" self_ip="$2" self_free="$3" self_conn="$4" self_version="$5"
-  python3 - "$FLEET_STATE" "$self_name" "$self_ip" "$self_free" "$self_conn" "$self_version" "$FLEET_CONN_BUSY_THRESHOLD" <<'PYEOF'
+  local self_name="$1" self_ip="$2" self_free="$3" self_conn="$4" self_version="$5" self_channel="${6:--}"
+  python3 - "$FLEET_STATE" "$self_name" "$self_ip" "$self_free" "$self_conn" "$self_version" "$FLEET_CONN_BUSY_THRESHOLD" "$self_channel" <<'PYEOF'
 import json, sys, time
 
-state_path, self_name, self_ip, self_free, self_conn, self_version, busy_threshold = sys.argv[1:8]
+state_path, self_name, self_ip, self_free, self_conn, self_version, busy_threshold, self_channel = sys.argv[1:9]
 busy_threshold = int(busy_threshold)
 try:
     data = json.load(open(state_path))
@@ -48,7 +50,7 @@ except Exception:
     data = {}
 
 now = time.time()
-rows = [{"label": f"{self_name} (you)", "ip": self_ip, "free": self_free, "conn": self_conn, "ver": self_version}]
+rows = [{"label": f"{self_name} (you)", "ip": self_ip, "free": self_free, "conn": self_conn, "ver": self_version, "chan": self_channel}]
 for name, info in sorted(data.items()):
     if now - info.get("seen", 0) >= 30:
         continue
@@ -60,10 +62,11 @@ for name, info in sorted(data.items()):
         "free": free,
         "conn": info.get("connections", "-"),
         "ver": info.get("version", "-"),
+        "chan": info.get("channel", "-"),
     })
 
-headers = {"label": "NAME", "ip": "IP", "free": "FREE", "conn": "CONN", "ver": "VER"}
-cols = ("label", "ip", "free", "conn", "ver")
+headers = {"label": "NAME", "ip": "IP", "free": "FREE", "conn": "CONN", "ver": "VER", "chan": "CHANNEL"}
+cols = ("label", "ip", "free", "conn", "ver", "chan")
 widths = {k: max(len(str(r[k])) for r in rows + [headers]) for k in cols}
 
 RESET, GREEN, YELLOW, RED = "\033[0m", "\033[32m", "\033[33m", "\033[31m"
@@ -79,6 +82,17 @@ def conn_color(value):
         return YELLOW
     return RED
 
+def chan_color(value):
+    # Same rule as channel_info in lib/selfupdate.sh - change both together.
+    v = str(value).upper()
+    if v in ("-", "NO GIT", ""):
+        return None
+    if v == "STABLE":
+        return GREEN
+    if v in ("STAGE", "STAGING", "BETA", "RC"):
+        return YELLOW
+    return RED
+
 def border(l, m, r):
     return l + m.join("-" * (widths[k] + 2) for k in cols) + r
 
@@ -86,8 +100,8 @@ def line(r, colorize=True):
     cells = []
     for k in cols:
         text = f"{str(r[k]):<{widths[k]}}"
-        if colorize and k == "conn":
-            color = conn_color(r[k])
+        if colorize and k in ("conn", "chan"):
+            color = conn_color(r[k]) if k == "conn" else chan_color(r[k])
             if color:
                 text = f"{color}{text}{RESET}"
         cells.append(text)
