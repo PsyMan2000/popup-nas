@@ -45,9 +45,9 @@ channel_badge() {
 # whiptail centres its box on screen: top = (rows - height) / 2, left =
 # (cols - width) / 2 (checked against real whiptail at many screen sizes).
 # The blank row is 2 rows above the box's bottom edge. The badge is
-# redrawn once a second so it comes back if the screen is ever repainted
-# (a resize, or a stray system message). Cursor position is saved and
-# restored around each draw so whiptail never notices.
+# redrawn once a second so it comes back if something paints over it (a
+# stray system message). Cursor position is saved and restored around each
+# draw so whiptail never notices.
 menu_badge_overlay() {
   local box_w="$1" box_h="$2" info label colour style text len esc size rows cols row col
   info=$(channel_info)
@@ -62,17 +62,21 @@ menu_badge_overlay() {
   text=" UPDATE CHANNEL: $label "
   len=${#text}
   esc=$(printf '\033')
+  # The screen size is read ONCE, right now, because whiptail reads it once
+  # when it draws its box and never re-centres the box if the window is
+  # resized afterwards (found on real hardware over SSH: the box stayed put
+  # but a badge that re-read the size moved away from it). Using the same
+  # frozen size keeps the badge locked to the box.
+  size=$(stty size <&2 2>/dev/null) || return 0
+  rows="${size% *}"
+  cols="${size#* }"
+  [ "$rows" -ge "$box_h" ] 2>/dev/null && [ "$cols" -ge "$box_w" ] 2>/dev/null || return 0
+  row=$(( (rows - box_h) / 2 + box_h - 1 ))
+  col=$(( (cols - box_w) / 2 + (box_w - len) / 2 + 1 ))
+  [ "$col" -lt 1 ] && col=1
   sleep 0.3
   while true; do
-    size=$(stty size <&2 2>/dev/null) || size=""
-    rows="${size% *}"
-    cols="${size#* }"
-    if [ -n "$rows" ] && [ "$rows" -ge "$box_h" ] 2>/dev/null && [ "$cols" -ge "$box_w" ] 2>/dev/null; then
-      row=$(( (rows - box_h) / 2 + box_h - 1 ))
-      col=$(( (cols - box_w) / 2 + (box_w - len) / 2 + 1 ))
-      [ "$col" -lt 1 ] && col=1
-      printf '%s7%s[%d;%dH%s[%sm%s%s[0m%s8' "$esc" "$esc" "$row" "$col" "$esc" "$style" "$text" "$esc" "$esc" >&2
-    fi
+    printf '%s7%s[%d;%dH%s[%sm%s%s[0m%s8' "$esc" "$esc" "$row" "$col" "$esc" "$style" "$text" "$esc" "$esc" >&2
     sleep 1
   done
 }
