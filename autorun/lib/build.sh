@@ -282,7 +282,7 @@ build_popup_iso() {
 # it created - the same layout a Rufus ISO-Image-mode stick has, which is
 # known to boot into popup-nas.
 make_new_stick() {
-  local root srm usbwriter src_iso exclude_disk disk confirm data_part mnt
+  local root srm usbwriter src_iso exclude_disk disk confirm data_part mnt sectors
   local iso_mb avail_mb uw tmp_unpack rc p lab_now
   local args=()
 
@@ -337,6 +337,29 @@ make_new_stick() {
   for p in $(lsblk -lnpo NAME "$disk" 2>/dev/null | tac); do
     umount "$p" 2>/dev/null || true
   done
+
+  # Wipe stale data off the target first. The USB writer only rewrites sector
+  # 0 and its own partition; anything left elsewhere on a REUSED stick (e.g.
+  # from a whole ISO that was dd'd to it earlier) can make Windows mark the
+  # new partition Offline, so the stick boots but gets no drive letter. Zero
+  # the first 64 MiB and the last 16 MiB (the same areas Rufus clears).
+  sectors=$(blockdev --getsz "$disk" 2>/dev/null || echo 0)
+  whiptail --infobox "Wiping old data from $disk ..." 8 60
+  wipefs -a "$disk" >/dev/null 2>&1 || true
+  if [ "$sectors" -le 131072 ]; then
+    whiptail --msgbox "$disk is too small to use (or its size couldn't be read). Nothing else was done." 10 70
+    return
+  fi
+  if ! dd if=/dev/zero of="$disk" bs=1M count=64 conv=fsync status=none 2>/dev/null; then
+    whiptail --msgbox "Couldn't write to the start of $disk (is it write-protected or failing?). Nothing else was done." 10 70
+    return
+  fi
+  if ! dd if=/dev/zero of="$disk" bs=512 seek=$((sectors - 32768)) count=32768 conv=fsync status=none 2>/dev/null; then
+    whiptail --msgbox "Couldn't write to the end of $disk (is it write-protected or failing?). Nothing else was done." 10 70
+    return
+  fi
+  sync
+  blockdev --rereadpt "$disk" 2>/dev/null || true
 
   # Run a copy of the writer from the build cache: the stick it may be
   # stored on is FAT, which is often mounted noexec. Extract-and-run mode
