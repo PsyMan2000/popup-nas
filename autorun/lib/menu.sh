@@ -20,7 +20,7 @@ build_submenu() {
 
 main_menu() {
   local hostname_value="$1"
-  local choice version channel_text newt_colors badge_pid backtitle
+  local choice version channel_text newt_colors badge_pid backtitle badge_dev
   local box_w=78 box_h=21
   # Computed once per session, not per loop - popup_version() only ever
   # changes via self_update(), and that restarts this whole script fresh
@@ -37,8 +37,9 @@ main_menu() {
   while true; do
     badge_pid=""
     backtitle=""
-    if menu_badge_fits "$box_w" "$box_h"; then
-      menu_badge_overlay "$box_w" "$box_h" &
+    badge_dev=$(badge_tty_dev)
+    if menu_badge_fits "$box_w" "$box_h" "$badge_dev"; then
+      menu_badge_overlay "$box_w" "$box_h" "$badge_dev" &
       badge_pid=$!
     else
       backtitle="$channel_text"

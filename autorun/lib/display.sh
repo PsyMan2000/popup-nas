@@ -33,6 +33,25 @@ channel_badge() {
   printf '\033[%sm UPDATE CHANNEL: %s \033[0m\n' "$style" "$label"
 }
 
+# Works out which terminal device is the real screen/terminal this menu
+# is on, and echoes its path (e.g. /dev/tty1 on the stick's own monitor, or
+# /dev/pts/3 over SSH). Found on real hardware 2026-10-05: on the stick's
+# own console autorun0's output and error streams are pipes (only its
+# INPUT is attached to /dev/tty1), so asking "how big is the screen?" of
+# the error stream failed and the badge fell back to the top-left corner.
+# Input is tried first, then error output, then normal output. Called
+# from main_menu() itself (not from the background overlay job, because a
+# background job in a non-interactive script has its input replaced by
+# /dev/null).
+badge_tty_dev() {
+  local fd dev
+  for fd in 0 2 1; do
+    dev=$(tty <&"$fd" 2>/dev/null) || continue
+    [ -n "$dev" ] && [ -c "$dev" ] && { echo "$dev"; return 0; }
+  done
+  return 1
+}
+
 # Draws the coloured channel badge on the blank row just under the OK /
 # Cancel buttons of the main menu box, centred, so it's right in front of
 # whoever is looking at the menu even on a big monitor. whiptail itself
@@ -41,15 +60,15 @@ channel_badge() {
 # menu. Started in the background by main_menu() just before whiptail runs
 # and killed as soon as whiptail returns.
 #
-# $1 = box width, $2 = box height (the same two numbers given to whiptail).
-# whiptail centres its box on screen: top = (rows - height) / 2, left =
+# $1 = box width, $2 = box height (the same two numbers given to whiptail),
+# $3 = the terminal device from badge_tty_dev. whiptail centres its box on screen: top = (rows - height) / 2, left =
 # (cols - width) / 2 (checked against real whiptail at many screen sizes).
 # The blank row is 2 rows above the box's bottom edge. The badge is
 # redrawn once a second so it comes back if something paints over it (a
 # stray system message). Cursor position is saved and restored around each
 # draw so whiptail never notices.
 menu_badge_overlay() {
-  local box_w="$1" box_h="$2" info label colour style text len esc size rows cols row col
+  local box_w="$1" box_h="$2" dev="$3" info label colour style text len esc size rows cols row col
   info=$(channel_info)
   label="${info%|*}"
   colour="${info##*|}"
@@ -67,7 +86,7 @@ menu_badge_overlay() {
   # resized afterwards (found on real hardware over SSH: the box stayed put
   # but a badge that re-read the size moved away from it). Using the same
   # frozen size keeps the badge locked to the box.
-  size=$(stty size <&2 2>/dev/null) || return 0
+  size=$(stty -F "$dev" size 2>/dev/null) || return 0
   rows="${size% *}"
   cols="${size#* }"
   [ "$rows" -ge "$box_h" ] 2>/dev/null && [ "$cols" -ge "$box_w" ] 2>/dev/null || return 0
@@ -76,17 +95,19 @@ menu_badge_overlay() {
   [ "$col" -lt 1 ] && col=1
   sleep 0.3
   while true; do
-    printf '%s7%s[%d;%dH%s[%sm%s%s[0m%s8' "$esc" "$esc" "$row" "$col" "$esc" "$style" "$text" "$esc" "$esc" >&2
+    printf '%s7%s[%d;%dH%s[%sm%s%s[0m%s8' "$esc" "$esc" "$row" "$col" "$esc" "$style" "$text" "$esc" "$esc" > "$dev" 2>/dev/null
     sleep 1
   done
 }
 
 # True if the screen is big enough for the badge overlay above to fit
 # under the main menu box (so main_menu() knows whether it also needs the
-# plain top-left banner as a fallback). $1 = box width, $2 = box height.
+# plain top-left banner as a fallback). $1 = box width, $2 = box height,
+# $3 = the terminal device from badge_tty_dev.
 menu_badge_fits() {
   local size rows cols
-  size=$(stty size <&2 2>/dev/null) || return 1
+  [ -n "$3" ] || return 1
+  size=$(stty -F "$3" size 2>/dev/null) || return 1
   rows="${size% *}"
   cols="${size#* }"
   [ "$rows" -ge "$2" ] 2>/dev/null && [ "$cols" -ge "$1" ] 2>/dev/null
