@@ -132,7 +132,7 @@ status_screen() {
   local hostname_value="$1"
   local key self_ip self_free free_bytes self_conn self_version display_version repo_root banner_text self_channel badge
   repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
-  self_version=$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || echo "-")
+  self_version=$(popup_commit)
   # The fleet table's own VER column stays as the bare commit hash above
   # (self_version) - it's a narrow column built for a short value.
   # display_version is the fuller "vX.Y.Z (hash)" form from

@@ -39,6 +39,10 @@ update_repo_branch() { echo "${UPDATE_BRANCH:-$DEFAULT_UPDATE_BRANCH}"; }
 # "NO GIT" for a stick that isn't a git checkout, because those never
 # self-update whatever popup-nas.conf says.
 channel_name() {
+  # Answer from the boot-time snapshot if main_menu() took one (see there):
+  # asking git again after the stick has been pulled out would wrongly say
+  # "NO GIT".
+  if [ -n "${CHANNEL_NAME_CACHE:-}" ]; then echo "$CHANNEL_NAME_CACHE"; return 0; fi
   local repo_root
   repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
   if ! git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1; then
@@ -56,6 +60,8 @@ channel_name() {
 # they make `git merge --ff-only` refuse, so the stick silently stops
 # updating (found on real hardware 2026-10-05).
 channel_info() {
+  # Same boot-time snapshot rule as channel_name above.
+  if [ -n "${CHANNEL_INFO_CACHE:-}" ]; then echo "$CHANNEL_INFO_CACHE"; return 0; fi
   local name colour repo_root label
   name=$(channel_name)
   case "$name" in
@@ -71,6 +77,27 @@ channel_info() {
     [ "$colour" = green ] && colour=amber
   fi
   echo "$label|$colour"
+}
+
+# This checkout's current git commit, short form ("-" if there isn't one).
+# Same boot-time snapshot rule as channel_name above (POPUP_COMMIT_CACHE).
+popup_commit() {
+  if [ -n "${POPUP_COMMIT_CACHE:-}" ]; then echo "$POPUP_COMMIT_CACHE"; return 0; fi
+  local repo_root
+  repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
+  git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || echo "-"
+}
+
+# True if the stick this box booted from is still plugged in. Looks at the
+# block device behind $HERE's mount rather than reading files from it,
+# because a stick that has just been pulled out can still answer "does this
+# file exist?" from the kernel's cache, but its device node (/dev/sdX1) is
+# gone. Used by the menu to explain, instead of failing confusingly, when
+# an option that needs the stick (8 and 9) is chosen after it was removed.
+stick_present() {
+  local src
+  src=$(findmnt -T "$HERE" -no SOURCE 2>/dev/null) || return 1
+  [ -b "$src" ]
 }
 
 # Remounts $1's filesystem read-write if it's currently read-only (common
@@ -108,6 +135,8 @@ clone_update_repo() {
 # plain-file-copy way (no VERSION file, no .git) just shows whichever
 # part it has, or "-" if it has neither, rather than failing.
 popup_version() {
+  # Same boot-time snapshot rule as channel_name above.
+  if [ -n "${POPUP_VERSION_CACHE:-}" ]; then echo "$POPUP_VERSION_CACHE"; return 0; fi
   local repo_root ver_file version hash
   repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
   ver_file="$repo_root/VERSION"
