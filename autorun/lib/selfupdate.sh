@@ -1,3 +1,4 @@
+
 # Self-updating sticks: pull the latest "stable" version of popup-nas
 # straight from its public GitHub repo, right at boot, before anything else
 # runs. This is what replaces the old manual "git pull on your PC, then
@@ -32,6 +33,46 @@ DEFAULT_UPDATE_BRANCH="stable"
 
 update_repo_url() { echo "${UPDATE_REPO_URL:-$DEFAULT_UPDATE_REPO_URL}"; }
 update_repo_branch() { echo "${UPDATE_BRANCH:-$DEFAULT_UPDATE_BRANCH}"; }
+
+# The "channel" this stick follows, in capitals, for the traffic-light
+# banner on the menu / status screen and the CHANNEL column of the fleet
+# table: the branch it self-updates from (stable, stage, dev, test-...).
+# "NO GIT" for a stick that isn't a git checkout, because those never
+# self-update whatever popup-nas.conf says.
+channel_name() {
+  local repo_root
+  repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
+  if ! git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "NO GIT"
+    return 0
+  fi
+  update_repo_branch | tr '[:lower:]' '[:upper:]'
+}
+
+# Echoes "LABEL|colour" for the banner. Colour is green (stable), amber
+# (stage/staging/beta/rc), red (anything else: dev, test-..., v2, ...) or
+# grey (not a git checkout). The same rule is repeated in fleet_table() in
+# lib/fleet.sh - change both together. Edits to tracked files push the
+# colour from green to amber and are spelled out in the label, because
+# they make `git merge --ff-only` refuse, so the stick silently stops
+# updating (found on real hardware 2026-10-05).
+channel_info() {
+  local name colour repo_root label
+  name=$(channel_name)
+  case "$name" in
+    "NO GIT") echo "NO GIT - WON'T SELF-UPDATE|grey"; return 0 ;;
+    STABLE) colour=green ;;
+    STAGE|STAGING|BETA|RC) colour=amber ;;
+    *) colour=red ;;
+  esac
+  label="$name"
+  repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
+  if [ -n "$(git -C "$repo_root" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    label="$label + LOCAL CHANGES (UPDATES BLOCKED)"
+    [ "$colour" = green ] && colour=amber
+  fi
+  echo "$label|$colour"
+}
 
 # Remounts $1's filesystem read-write if it's currently read-only (common
 # on real hardware - see autorun0's scan_all_partitions, which deliberately
