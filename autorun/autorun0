@@ -194,6 +194,20 @@ write_ssh_menu_helper "$(cd "$HERE/.." 2>/dev/null && pwd)"
 HOSTNAME_VALUE=$(ask_hostname)
 hostnamectl set-hostname "$HOSTNAME_VALUE" 2>/dev/null || true
 
+# After a reboot or power cut: if this machine's disk still holds the share
+# from before, mount it and share it again with its files (see
+# reattach_share in lib/partition.sh). Done after the hostname is set,
+# because the SMB server name is made from the hostname.
+reattach_share
+case $? in
+  0) if [ "${REATTACHED:-0}" = 1 ]; then
+       echo ""
+       echo "Found the share from before and shared it again: $(share_image_summary)"
+       sleep 3
+     fi ;;
+  2) whiptail --msgbox "An earlier share was found on this machine but could not be re-attached:\n\n$(printf '%s' "$REATTACH_ERR" | head -n 3 | fold -s -w 66)\n\nNothing was changed. Menu option 2 sets up a new share (that erases the disk)." 14 72 ;;
+esac
+
 start_fleet_broadcast "$HOSTNAME_VALUE"
 
 main_menu "$HOSTNAME_VALUE"

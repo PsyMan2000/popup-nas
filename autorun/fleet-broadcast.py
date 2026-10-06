@@ -72,10 +72,45 @@ def my_version():
 VERSION = my_version()
 
 
+# How many characters of each image's name are announced (shown in the
+# IMAGES column of the status screen). lib/populate.sh has its own copy of
+# this number (IMAGE_NAME_CHARS) - change both. At most this many names are
+# sent, so the broadcast always stays small.
+IMAGE_NAME_CHARS = 8
+IMAGE_NAMES_MAX = 6
+
+
+def image_summary():
+    # The finished .wim files on this box's share: how many, their total
+    # size in GB, and the first few characters of each name (without
+    # ".wim"), so other boxes can offer "copy from this popup". Same rule as
+    # list_wims() in lib/populate.sh: up to 4 levels deep, and names
+    # starting with "." are skipped - rsync keeps half-finished copies under
+    # hidden names, so an unfinished file is never announced.
+    found, total = [], 0
+    try:
+        for dirpath, dirnames, filenames in os.walk(share_mount):
+            depth = os.path.relpath(dirpath, share_mount).count(os.sep) + 1 if dirpath != share_mount else 0
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")] if depth < 3 else []
+            for f in filenames:
+                if f.startswith(".") or not f.lower().endswith(".wim"):
+                    continue
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, f))
+                    found.append((os.path.relpath(os.path.join(dirpath, f), share_mount), f[:-4][:IMAGE_NAME_CHARS]))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    found.sort()
+    return len(found), round(total / 1e9, 1), [name for _, name in found[:IMAGE_NAMES_MAX]]
+
+
 def broadcaster():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     while True:
+        images, images_gb, image_names = image_summary()
         msg = json.dumps({
             "name": hostname,
             "ip": my_ip(),
@@ -83,6 +118,9 @@ def broadcaster():
             "connections": connection_count(),
             "version": VERSION,
             "channel": CHANNEL,
+            "images": images,
+            "images_gb": images_gb,
+            "image_names": image_names,
             "ts": time.time(),
         })
         try:
@@ -112,6 +150,9 @@ def listener():
             "connections": msg.get("connections", 0),
             "version": msg.get("version", "-"),
             "channel": msg.get("channel", "-"),
+            "images": msg.get("images"),
+            "images_gb": msg.get("images_gb", 0),
+            "image_names": msg.get("image_names") or [],
             "seen": time.time(),
         }
         peers = {k: v for k, v in peers.items() if time.time() - v["seen"] < 60}
