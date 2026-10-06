@@ -4,7 +4,15 @@ SystemRescue supports adding extra packages via an "SRM" module — a squashfs
 overlay you build once on a running SystemRescue system, then reuse on every
 USB stick. This avoids needing our own live-build pipeline.
 
-## Step 1: build the SRM module (do this once, reuse the result on every stick)
+## Step 0 (easiest): don't build it - download the published one
+
+The finished module is published as a Release asset on this repo (tag `srm-13.02`, built for SystemRescue 13.02): <https://github.com/PsyMan2000/popup-nas/releases/tag/srm-13.02>. Click `popup-nas.srm` under **Assets** to download it. Keep the file name exactly `popup-nas.srm`.
+
+You don't even need to do that by hand if you use the scripts: `../scripts/make-stick.sh` (leave the `.srm` argument out) and `./make-iso.sh` (write `auto` instead of the `.srm` path) download it for you and check it against its SHA-256 first. The stick's own menu (**Make more sticks**) does the same if the stick it runs on has no `.srm`.
+
+Only continue with Step 1 if the package list changes or SystemRescue is upgraded - see "Publishing a new SRM" at the bottom.
+
+## Step 1: build the SRM module (only needed if the package list or the SystemRescue version changes)
 
 1. Boot SystemRescue (a VM is fine — it doesn't need to be real hardware for this step) with `copytoram`.
 2. Install what popup-nas needs. Some of these are probably already on SystemRescue — pacman will just report that and skip them:
@@ -39,3 +47,9 @@ then download the script itself from SystemRescue's own source repo — currentl
 — and put it somewhere on your `PATH` (e.g. `/usr/local/bin/`, `chmod +x` it).
 
 **Boot-test the resulting ISO in a VM and confirm it reaches the hostname prompt normally before flashing it to real sticks or trusting it on real hardware** - same caution as everything else in this repo that touches booting.
+
+## Publishing a new SRM (after rebuilding it)
+
+1. On the repo's page: **Releases → Draft a new release**.
+2. Tag: `srm-<SystemRescue version>` (e.g. `srm-13.03`), created on publish. Attach the file named exactly `popup-nas.srm`, then publish.
+3. Work out its checksum (`sha256sum popup-nas.srm`) and update `DEFAULT_SRM_URL` and `DEFAULT_SRM_SHA256` in `autorun/lib/build.sh`, together with `DEFAULT_SYSRESCUE_ISO_URL` and `DEFAULT_SYSRESCUE_USBWRITER_URL` in the same file (the three must all match one SystemRescue version).
