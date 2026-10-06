@@ -18,8 +18,9 @@ build_submenu() {
   done
 }
 
-# Used by menu items 8 and 9, which genuinely need the stick (8 copies
-# from it, 9 writes updates onto it). Returns 0 if the stick is there; if
+# Used by menu items 8, 9 and 10, which genuinely need the stick (8 copies
+# from it, 9 writes updates onto it, 10 saves the NAS settings onto it).
+# Returns 0 if the stick is there; if
 # not, explains and returns 1 so the caller skips the action.
 need_stick() {
   stick_present && return 0
@@ -34,7 +35,7 @@ Options 1 to 7 don't need the stick and carry on working." 14 70
 main_menu() {
   local hostname_value="$1"
   local choice version channel_text newt_colors badge_pid backtitle badge_dev default_item=1
-  local box_w=78 box_h=21
+  local box_w=78 box_h=22
   # Boot-time snapshot of the things read from the stick's git checkout
   # (version, commit, update channel). Taken once here, while the stick is
   # certainly still in, and reused by the badge and status screen, so that
@@ -67,21 +68,22 @@ main_menu() {
       backtitle="$channel_text"
     fi
     # Items 1-7 work with the stick pulled out (the system runs from RAM
-    # and these only touch this PC's disk). 8 and 9 need the stick, so they
+    # and these only touch this PC's disk). 8, 9 and 10 need the stick, so they
     # sit under a separator line. The "-" row is just that line: choosing
     # it does nothing (see the case below). Its text starts with a space on
     # purpose: whiptail reads any text starting with "--" as an option.
-    choice=$(NEWT_COLORS="$newt_colors" whiptail --backtitle "$backtitle" --title "popup-nas [$hostname_value] - $version" --default-item "$default_item" --menu "What do you want to do?" "$box_h" "$box_w" 10 \
+    choice=$(NEWT_COLORS="$newt_colors" whiptail --backtitle "$backtitle" --title "popup-nas [$hostname_value] - $version" --default-item "$default_item" --menu "What do you want to do?" "$box_h" "$box_w" 11 \
       "1" "Show status screen (hostname, IP, fleet)" \
       "2" "Set up the SMB share (shrink NTFS, or use a wiped disk whole)" \
-      "3" "Fill the share with the master image" \
+      "3" "Fill the share: pick .wim files (NAS, another popup, USB)" \
       "4" "Reverse partitioning (delete share, restore original state)" \
       "5" "Drop to a shell" \
       "6" "Reboot" \
       "7" "Power off" \
-      "-" " ------ Leave the stick IN to use the two below ------" \
+      "-" " ------ Leave the stick IN to use the three below ------" \
       "8" "Make more sticks (build an ISO, or clone to a new USB)" \
-      "9" "Pull latest update now (no reboot needed)" 3>&1 1>&2 2>&3)
+      "9" "Pull latest update now (no reboot needed)" \
+      "10" "Change the NAS settings (path, login) and pick files" 3>&1 1>&2 2>&3)
     local rc=$?
     if [ -n "$badge_pid" ]; then
       kill "$badge_pid" 2>/dev/null
@@ -101,6 +103,7 @@ main_menu() {
       -) default_item=8 ;;
       8) need_stick && build_submenu ;;
       9) need_stick && pull_update_now ;;
+      10) need_stick && edit_nas_settings ;;
     esac
   done
 }

@@ -40,6 +40,15 @@ part_dev() {
 
 setup_share() {
   local disk
+  # A share that is already attached (set up earlier this boot, or found and
+  # re-attached at boot by reattach_share) holds the images. Setting up
+  # again formats the disk, which erases them - including any half-finished
+  # copy that could otherwise be continued - so ask first, defaulting to No.
+  if mountpoint -q "$SHARE_MOUNT" 2>/dev/null; then
+    whiptail --defaultno --title "Share already set up" --yesno \
+      "This popup already has a share, holding: $(declare -F share_image_summary >/dev/null && share_image_summary).\n\nSetting up again ERASES everything on it, including any half-finished copy.\n\nErase it and set up again?" \
+      13 74 || return
+  fi
   disk=$(pick_disk) || return
 
   if ! has_ntfs_partition "$disk"; then
@@ -152,6 +161,44 @@ setup_share_whole_disk() {
 
 find_share_partition() {
   lsblk -lno NAME,LABEL 2>/dev/null | awk -v l="$SHARE_LABEL" '$2==l{print "/dev/"$1; exit}'
+}
+
+# Called once at boot, after the hostname is set: if this machine's disk
+# still holds a share from an earlier setup (a partition labelled
+# $SHARE_LABEL, ext4), mount it and share it over SMB again with the files
+# still on it, instead of making the operator set it up again - and lose a
+# half-finished 300 GB copy, because setting up formats the disk. It only
+# ever MOUNTS: nothing here formats, wipes or repartitions anything.
+# The popup itself boots from RAM, so a reboot or power cut loses nothing
+# on the disk. ext4 replays its own journal when it is mounted, which is
+# what makes a mount after a power cut safe.
+# Returns 0 = share re-attached, 1 = no earlier share found (nothing to do),
+# 2 = one was found but would not mount (REATTACH_ERR holds the reason).
+REATTACH_ERR=""
+REATTACHED=0   # set to 1 only when this call really mounted the share
+reattach_share() {
+  local part fstype
+  REATTACHED=0
+  mountpoint -q "$SHARE_MOUNT" 2>/dev/null && return 0
+  part=$(find_share_partition)
+  # lsblk takes labels from udev's database; blkid reads the disk itself, so
+  # it is the backstop if udev has not caught up yet this early in the boot.
+  [ -n "$part" ] || part=$(blkid -L "$SHARE_LABEL" 2>/dev/null | head -n1)
+  [ -n "$part" ] || return 1
+  fstype=$(lsblk -no FSTYPE "$part" 2>/dev/null | head -n1)
+  [ -n "$fstype" ] || fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null)
+  if [ "$fstype" != "ext4" ]; then
+    REATTACH_ERR="$part is labelled $SHARE_LABEL but is $fstype, not ext4, so it was left alone"
+    return 2
+  fi
+  mkdir -p "$SHARE_MOUNT"
+  if ! REATTACH_ERR=$(mount "$part" "$SHARE_MOUNT" 2>&1); then
+    return 2
+  fi
+  chmod 0777 "$SHARE_MOUNT" 2>/dev/null || true
+  configure_and_start_samba "$SHARE_MOUNT"
+  REATTACHED=1
+  return 0
 }
 
 reverse_share() {

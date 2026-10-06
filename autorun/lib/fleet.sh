@@ -36,13 +36,16 @@ start_fleet_broadcast() {
 # current SMB connection count, $5 = this box's own current git commit
 # short-hash (or "-" if this isn't a self-updating git checkout), $6 = this
 # box's own update channel name (from channel_name; shown in the CHANNEL
-# column - boxes still running older code don't report one, shown as "-").
+# column - boxes still running older code don't report one, shown as "-"),
+# $7 = this box's own image summary (share_image_summary in lib/populate.sh,
+# e.g. "Win11-Pr,Win10-Ed (45.3 GB)"; shown in the IMAGES column - other boxes report theirs
+# in their broadcast, and an older box that doesn't is shown as "?").
 fleet_table() {
-  local self_name="$1" self_ip="$2" self_free="$3" self_conn="$4" self_version="$5" self_channel="${6:--}"
-  python3 - "$FLEET_STATE" "$self_name" "$self_ip" "$self_free" "$self_conn" "$self_version" "$FLEET_CONN_BUSY_THRESHOLD" "$self_channel" <<'PYEOF'
+  local self_name="$1" self_ip="$2" self_free="$3" self_conn="$4" self_version="$5" self_channel="${6:--}" self_images="${7:--}"
+  python3 - "$FLEET_STATE" "$self_name" "$self_ip" "$self_free" "$self_conn" "$self_version" "$FLEET_CONN_BUSY_THRESHOLD" "$self_channel" "$self_images" <<'PYEOF'
 import json, sys, time
 
-state_path, self_name, self_ip, self_free, self_conn, self_version, busy_threshold, self_channel = sys.argv[1:9]
+state_path, self_name, self_ip, self_free, self_conn, self_version, busy_threshold, self_channel, self_images = sys.argv[1:10]
 busy_threshold = int(busy_threshold)
 try:
     data = json.load(open(state_path))
@@ -50,12 +53,31 @@ except Exception:
     data = {}
 
 now = time.time()
-rows = [{"label": f"{self_name} (you)", "ip": self_ip, "free": self_free, "conn": self_conn, "ver": self_version, "chan": self_channel}]
+rows = [{"label": f"{self_name} (you)", "ip": self_ip, "free": self_free, "conn": self_conn, "ver": self_version, "chan": self_channel, "img": self_images}]
 for name, info in sorted(data.items()):
     if now - info.get("seen", 0) >= 30:
         continue
     free = info.get("free_gb")
     free = f"{free} GB" if free is not None else "-"
+    # IMAGES: finished .wim files on that box's share. A box running an
+    # older popup-nas doesn't report this at all, shown as "?".
+    n_img = info.get("images")
+    if n_img is None:
+        img = "?"
+    elif n_img == 0:
+        img = "none"
+    else:
+        # First few characters of each image's name, then the total size -
+        # the same text share_image_summary (lib/populate.sh) makes for
+        # this box's own row. More than 3 images: the first 3, then "+N".
+        names = list(info.get("image_names") or [])
+        if names:
+            shown = names[:3]
+            if n_img > 3:
+                shown.append(f"+{n_img - 3}")
+            img = f"{','.join(shown)} ({info.get('images_gb', 0)} GB)"
+        else:
+            img = f"{n_img} / {info.get('images_gb', 0)} GB"
     rows.append({
         "label": name,
         "ip": info.get("ip", ""),
@@ -63,10 +85,11 @@ for name, info in sorted(data.items()):
         "conn": info.get("connections", "-"),
         "ver": info.get("version", "-"),
         "chan": info.get("channel", "-"),
+        "img": img,
     })
 
-headers = {"label": "NAME", "ip": "IP", "free": "FREE", "conn": "CONN", "ver": "VER", "chan": "CHANNEL"}
-cols = ("label", "ip", "free", "conn", "ver", "chan")
+headers = {"label": "NAME", "ip": "IP", "free": "FREE", "conn": "CONN", "ver": "VER", "chan": "CHANNEL", "img": "IMAGES"}
+cols = ("label", "ip", "free", "conn", "ver", "chan", "img")
 widths = {k: max(len(str(r[k])) for r in rows + [headers]) for k in cols}
 
 RESET, GREEN, YELLOW, RED = "\033[0m", "\033[32m", "\033[33m", "\033[31m"
