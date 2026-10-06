@@ -44,11 +44,12 @@ main_menu() {
   # restarts, so a new version always takes a fresh snapshot. The "unset"
   # makes the four lines below compute live instead of reusing an older
   # snapshot.
-  unset POPUP_VERSION_CACHE CHANNEL_NAME_CACHE CHANNEL_INFO_CACHE POPUP_COMMIT_CACHE
+  unset POPUP_VERSION_CACHE CHANNEL_NAME_CACHE CHANNEL_INFO_CACHE POPUP_COMMIT_CACHE POPUP_NUMBER_CACHE
   POPUP_VERSION_CACHE=$(popup_version)
   CHANNEL_NAME_CACHE=$(channel_name)
   CHANNEL_INFO_CACHE=$(channel_info)
   POPUP_COMMIT_CACHE=$(popup_commit)
+  POPUP_NUMBER_CACHE=$(popup_number)
   version="$POPUP_VERSION_CACHE"
   # The update-channel banner (stable = green, stage = amber, anything
   # else = red; see channel_info in lib/selfupdate.sh). It is drawn as a

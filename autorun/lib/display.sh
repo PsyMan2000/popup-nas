@@ -130,11 +130,12 @@ channel_newt_colors() {
 
 status_screen() {
   local hostname_value="$1"
-  local key self_ip self_free free_bytes self_conn self_version display_version repo_root banner_text self_channel badge self_images
+  local key self_ip self_free free_bytes self_conn self_version display_version repo_root banner_text self_channel badge self_images self_number
   repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
   self_version=$(popup_commit)
-  # The fleet table's own VER column stays as the bare commit hash above
-  # (self_version) - it's a narrow column built for a short value.
+  self_number=$(popup_number)
+  # The fleet table's VER column shows the commit hash first, then the
+  # version number ("7ebc0bc 1.5.1"); fleet_table puts the two together.
   # display_version is the fuller "vX.Y.Z (hash)" form from
   # popup_version(), shown once on its own line instead.
   display_version=$(popup_version)
@@ -175,7 +176,7 @@ status_screen() {
     fi
     self_conn=$(smb_connection_count)
     self_images=$(share_image_summary)
-    fleet_table "$hostname_value" "${self_ip:-?}" "$self_free" "$self_conn" "$self_version" "$self_channel" "$self_images"
+    fleet_table "$hostname_value" "${self_ip:-?}" "$self_free" "$self_conn" "$self_version" "$self_channel" "$self_images" "$self_number"
     echo ""
     echo "CONN colour key: green = idle, yellow = some load, red = busy"
     echo "CHANNEL colour key: green = stable, yellow = stage, red = anything else (dev/test)"

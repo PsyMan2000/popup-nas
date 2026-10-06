@@ -72,6 +72,20 @@ def my_version():
 VERSION = my_version()
 
 
+def my_version_number():
+    # The version NUMBER from the VERSION file in the repo root (e.g.
+    # "1.5.1"), announced next to the commit so the status screen can show
+    # both. "" if the file can't be read.
+    try:
+        with open(os.path.join(repo_root, "VERSION")) as f:
+            return f.read().strip()[:16]
+    except OSError:
+        return ""
+
+
+VERSION_NUMBER = my_version_number()
+
+
 # How many characters of each image's name are announced (shown in the
 # IMAGES column of the status screen). lib/populate.sh has its own copy of
 # this number (IMAGE_NAME_CHARS) - change both. At most this many names are
@@ -117,6 +131,7 @@ def broadcaster():
             "free_gb": free_gb(),
             "connections": connection_count(),
             "version": VERSION,
+            "version_number": VERSION_NUMBER,
             "channel": CHANNEL,
             "images": images,
             "images_gb": images_gb,
@@ -149,6 +164,7 @@ def listener():
             "free_gb": msg.get("free_gb"),
             "connections": msg.get("connections", 0),
             "version": msg.get("version", "-"),
+            "version_number": msg.get("version_number") or "",
             "channel": msg.get("channel", "-"),
             "images": msg.get("images"),
             "images_gb": msg.get("images_gb", 0),

@@ -126,6 +126,17 @@ clone_update_repo() {
   GIT_TERMINAL_PROMPT=0 timeout 30 git clone --quiet --branch "$(update_repo_branch)" --single-branch "$(update_repo_url)" "$dest" >/tmp/popup-clone.log 2>&1
 }
 
+# This checkout's version NUMBER (the VERSION file, e.g. "1.5.1"), or "" if it
+# can't be read. Shown after the commit in the status screen's VER column.
+# Same boot-time snapshot rule as popup_commit (POPUP_NUMBER_CACHE).
+popup_number() {
+  if [ -n "${POPUP_NUMBER_CACHE:-}" ]; then echo "$POPUP_NUMBER_CACHE"; return 0; fi
+  local repo_root
+  repo_root="$(cd "$HERE/.." 2>/dev/null && pwd)"
+  [ -f "$repo_root/VERSION" ] && tr -d '[:space:]' < "$repo_root/VERSION"
+  return 0
+}
+
 # Reads this checkout's VERSION file (a plain X.Y.Z string, bumped by hand
 # whenever a change is worth calling out) plus its current git commit
 # short-hash, and returns them combined as one display string, e.g.

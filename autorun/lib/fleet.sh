@@ -39,21 +39,32 @@ start_fleet_broadcast() {
 # column - boxes still running older code don't report one, shown as "-"),
 # $7 = this box's own image summary (share_image_summary in lib/populate.sh,
 # e.g. "Win11-Pr,Win10-Ed (45.3 GB)"; shown in the IMAGES column - other boxes report theirs
-# in their broadcast, and an older box that doesn't is shown as "?").
+# in their broadcast, and an older box that doesn't is shown as "?"),
+# $8 = this box's own version number from the VERSION file (e.g. "1.5.1"; the
+# VER column then reads "<commit> <number>", and just the commit if the box
+# doesn't report a number - an older popup, or no number passed).
 fleet_table() {
-  local self_name="$1" self_ip="$2" self_free="$3" self_conn="$4" self_version="$5" self_channel="${6:--}" self_images="${7:--}"
-  python3 - "$FLEET_STATE" "$self_name" "$self_ip" "$self_free" "$self_conn" "$self_version" "$FLEET_CONN_BUSY_THRESHOLD" "$self_channel" "$self_images" <<'PYEOF'
+  local self_name="$1" self_ip="$2" self_free="$3" self_conn="$4" self_version="$5" self_channel="${6:--}" self_images="${7:--}" self_number="${8:-}"
+  python3 - "$FLEET_STATE" "$self_name" "$self_ip" "$self_free" "$self_conn" "$self_version" "$FLEET_CONN_BUSY_THRESHOLD" "$self_channel" "$self_images" "$self_number" <<'PYEOF'
 import json, sys, time
 
-state_path, self_name, self_ip, self_free, self_conn, self_version, busy_threshold, self_channel, self_images = sys.argv[1:10]
+state_path, self_name, self_ip, self_free, self_conn, self_version, busy_threshold, self_channel, self_images, self_number = sys.argv[1:11]
 busy_threshold = int(busy_threshold)
 try:
     data = json.load(open(state_path))
 except Exception:
     data = {}
 
+def ver_text(commit, number):
+    # "<commit> <number>", commit first. Just the commit if there is no
+    # number; just the number if there is no commit ("-").
+    commit, number = str(commit or "-"), str(number or "").strip()
+    if not number:
+        return commit
+    return number if commit == "-" else f"{commit} {number}"
+
 now = time.time()
-rows = [{"label": f"{self_name} (you)", "ip": self_ip, "free": self_free, "conn": self_conn, "ver": self_version, "chan": self_channel, "img": self_images}]
+rows = [{"label": f"{self_name} (you)", "ip": self_ip, "free": self_free, "conn": self_conn, "ver": ver_text(self_version, self_number), "chan": self_channel, "img": self_images}]
 for name, info in sorted(data.items()):
     if now - info.get("seen", 0) >= 30:
         continue
@@ -83,7 +94,7 @@ for name, info in sorted(data.items()):
         "ip": info.get("ip", ""),
         "free": free,
         "conn": info.get("connections", "-"),
-        "ver": info.get("version", "-"),
+        "ver": ver_text(info.get("version", "-"), info.get("version_number")),
         "chan": info.get("channel", "-"),
         "img": img,
     })
