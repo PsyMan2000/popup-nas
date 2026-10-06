@@ -1,6 +1,10 @@
 #!/bin/bash
 # THROWAWAY test helper - lives on the test-srm-release branch only, never on
-# stable. Usage:  bash pick-test.sh [name-for-this-popup]
+# stable. Usage:  bash pick-test.sh [name-for-this-popup] [nosrm]
+#
+# Add the word  nosrm  as the second argument to make THIS session pretend the
+# stick has no popup-nas.srm, so "Make more sticks" has to download it from
+# the GitHub Release. Nothing on the stick is moved or changed.
 #
 # Loads this branch's version of the menu code over the top of the stick's
 # own copy, for THIS session only, then opens the main menu. Leave it with
@@ -44,6 +48,11 @@ curl -fsSL "$BASE/fleet-broadcast.py" -o /tmp/picktest/fleet-broadcast.py || { e
 pull_update_now() {
   whiptail --msgbox "Option 9 is switched off while testing, so the stick can't be moved onto the test branch by accident." 9 62
 }
+
+if [ "${2:-}" = nosrm ]; then
+  find_srm() { return 0; }
+  echo "TEST MODE: this session pretends the stick has no popup-nas.srm."
+fi
 
 NAME="${1:-$(hostname)}"
 pkill -f "fleet-broadcast\.py" 2>/dev/null || true
