@@ -120,6 +120,16 @@ menu() {
     echo "menu: \$root doesn't look like this box's boot media any more - check 'lsblk' by hand." >&2
     return 1
   fi
+  # By default just start the program again from the files already on the
+  # stick, so a test version or a version picked in menu option 9 stays as
+  # it is. Only "menu fresh" downloads $repo_branch and copies it over
+  # everything (found 2026-10-08: plain "menu" used to do that, and quietly
+  # replaced a test version with stable).
+  if [ "\${1:-}" != "fresh" ] && [ -f "\$root/autorun/autorun0" ]; then
+    echo "menu: starting again from the files already on this stick (type 'menu fresh' to download a new copy of $repo_branch over them)."
+    bash "\$root/autorun/autorun0"
+    return
+  fi
   fresh=\$(mktemp -d)
   if ! git clone --quiet --branch "$repo_branch" --single-branch "$repo_url" "\$fresh"; then
     echo "menu: couldn't clone $repo_url - check network and try again." >&2
