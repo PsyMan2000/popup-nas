@@ -92,39 +92,48 @@ VERSION_NUMBER = my_version_number()
 # sent, so the broadcast always stays small.
 IMAGE_NAME_CHARS = 8
 IMAGE_NAMES_MAX = 6
+# Folders that are never announced (see image_summary).
+SKIP_DIRS = {"lost+found", "System Volume Information", "$RECYCLE.BIN"}
 
 
 def image_summary():
-    # The finished .wim files on this box's share: how many, their total
-    # size in GB, and the first few characters of each name (without
-    # ".wim"), so other boxes can offer "copy from this popup". Same rule as
-    # list_wims() in lib/populate.sh: up to 4 levels deep, and names
+    # The finished files on this box's share: how many .wim images, their
+    # total size in GB, and the first few characters of each name (without
+    # ".wim"), so other boxes can offer "copy from this popup". Also how many
+    # files of ANY type there are and their total size, so a popup that only
+    # holds other files can be offered as a source too. Same rule as
+    # list_wims()/list_files() in lib/populate.sh: up to 4 levels deep, names
     # starting with "." are skipped - rsync keeps half-finished copies under
-    # hidden names, so an unfinished file is never announced.
-    found, total = [], 0
+    # hidden names, so an unfinished file is never announced - and so are
+    # lost+found, System Volume Information and $RECYCLE.BIN.
+    found, total, n_files, files_total = [], 0, 0, 0
     try:
         for dirpath, dirnames, filenames in os.walk(share_mount):
             depth = os.path.relpath(dirpath, share_mount).count(os.sep) + 1 if dirpath != share_mount else 0
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")] if depth < 3 else []
+            dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS] if depth < 3 else []
             for f in filenames:
-                if f.startswith(".") or not f.lower().endswith(".wim"):
+                if f.startswith("."):
                     continue
                 try:
-                    total += os.path.getsize(os.path.join(dirpath, f))
-                    found.append((os.path.relpath(os.path.join(dirpath, f), share_mount), f[:-4][:IMAGE_NAME_CHARS]))
+                    size = os.path.getsize(os.path.join(dirpath, f))
                 except OSError:
-                    pass
+                    continue
+                n_files += 1
+                files_total += size
+                if f.lower().endswith(".wim"):
+                    total += size
+                    found.append((os.path.relpath(os.path.join(dirpath, f), share_mount), f[:-4][:IMAGE_NAME_CHARS]))
     except OSError:
         pass
     found.sort()
-    return len(found), round(total / 1e9, 1), [name for _, name in found[:IMAGE_NAMES_MAX]]
+    return len(found), round(total / 1e9, 1), [name for _, name in found[:IMAGE_NAMES_MAX]], n_files, round(files_total / 1e9, 1)
 
 
 def broadcaster():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     while True:
-        images, images_gb, image_names = image_summary()
+        images, images_gb, image_names, files, files_gb = image_summary()
         msg = json.dumps({
             "name": hostname,
             "ip": my_ip(),
@@ -136,6 +145,8 @@ def broadcaster():
             "images": images,
             "images_gb": images_gb,
             "image_names": image_names,
+            "files": files,
+            "files_gb": files_gb,
             "ts": time.time(),
         })
         try:
@@ -169,6 +180,8 @@ def listener():
             "images": msg.get("images"),
             "images_gb": msg.get("images_gb", 0),
             "image_names": msg.get("image_names") or [],
+            "files": msg.get("files"),
+            "files_gb": msg.get("files_gb", 0),
             "seen": time.time(),
         }
         peers = {k: v for k, v in peers.items() if time.time() - v["seen"] < 60}
