@@ -479,15 +479,17 @@ copy_isig_off() {
 # because on the stick's console and in a VM console the Ctrl+C signal also
 # reaches the program that launched this menu, which then ends and drops the
 # operator at a bare root prompt (seen on real VMs 2026-10-06). So Ctrl+C
-# arrives here as an ordinary key press instead: Ctrl+C, Q or Esc asks the
-# copy to stop (COPY_STOP=1). With no terminal device it just sleeps.
+# arrives here as an ordinary key press instead: Q (or Ctrl+C, which is still
+# understood, e.g. over SSH) asks the copy to stop (COPY_STOP=1). The Esc key
+# is deliberately NOT a stop key: an arrow key sends Esc first, and a stray
+# arrow key must not stop a copy. With no terminal device it just sleeps.
 copy_wait_key() {
   local key="" t0=$SECONDS
   if [ -n "${COPY_DEV:-}" ] && [ -r "$COPY_DEV" ]; then
     copy_isig_off
     IFS= read -r -s -n 1 -t 2 key < "$COPY_DEV" 2>/dev/null
     case "$key" in
-      $'\003'|q|Q|$'\033') COPY_STOP=1; return 0 ;;
+      $'\003'|q|Q) COPY_STOP=1; return 0 ;;
     esac
     # If the read came back at once (nothing to read, or a key we ignore),
     # still wait, so the loop never spins.
@@ -497,7 +499,7 @@ copy_wait_key() {
   fi
 }
 
-# A quick, non-blocking look for the stop key (Ctrl+C, Q or Esc) - used
+# A quick, non-blocking look for the stop key (Q, or Ctrl+C) - used
 # BETWEEN files, so a long run of small files, each too quick to ever reach
 # copy_wait_key, can still be stopped.
 copy_check_stop() {
@@ -505,13 +507,13 @@ copy_check_stop() {
   { [ -n "${COPY_DEV:-}" ] && [ -r "$COPY_DEV" ]; } || return 0
   IFS= read -r -s -n 1 -t 0.05 key < "$COPY_DEV" 2>/dev/null
   case "$key" in
-    $'\003'|q|Q|$'\033') COPY_STOP=1 ;;
+    $'\003'|q|Q) COPY_STOP=1 ;;
   esac
   return 0
 }
 
 # Copies source file $1 into the hidden part file $2 with rsync running in
-# the background, drawing the progress line while it runs. Ctrl+C (or Q)
+# the background, drawing the progress line while it runs. Q (or Ctrl+C)
 # stops the copy cleanly (the part file stays, so it can be continued) and returns
 # 130. rsync's own messages go to /tmp/popup-copy.log.
 #   $3 = bytes the part file already held (see copy_progress_line)
@@ -681,7 +683,7 @@ copy_files_from_source() {
   else
     what="Copy $n_sel file(s), $(fmt_gb "$needed") still to copy, from $label to this share?"
   fi
-  whiptail --yesno "$what\n\nThe time left is worked out from the real speed once the copy has been running for about 20 seconds, and shown on the screen as it goes.\n\nPress Ctrl+C (or Q) to stop it. Run it again and it carries on from where it stopped." 17 74 || return
+  whiptail --yesno "$what\n\nThe time left is worked out from the real speed once the copy has been running for about 20 seconds, and shown on the screen as it goes.\n\nPress Q to stop it (do not use Ctrl+C on this screen). Run it again and it carries on from where it stopped." 17 74 || return
 
   COPY_DEV=$(copy_pick_tty) || COPY_DEV=""
   if [ -n "$COPY_DEV" ]; then clear > "$COPY_DEV" 2>/dev/null || clear; else clear; fi
@@ -693,7 +695,7 @@ copy_files_from_source() {
     copy_isig_off
   fi
   copy_say 'Copying from %s to %s ...\n' "$label" "$SHARE_MOUNT"
-  copy_say 'Total to copy: %s.  Press Ctrl+C (or Q) to stop - it carries on later.\n' "$(fmt_gb "$needed")"
+  copy_say 'Total to copy: %s.  Press Q to stop - it carries on later.\n' "$(fmt_gb "$needed")"
   : > /tmp/popup-copy.log
   # A note for troubleshooting: which terminal was used, and whether the
   # Ctrl+C signal really is off now (-isig = off; isig = still on).
