@@ -2,7 +2,7 @@
 
 **The problem this solves:** when imaging a lot of PCs at once over PXE/USB into Ninja One, the central NAS serving the master image can become the bottleneck. This tool turns spare PCs on the same LAN into temporary, disposable "relief" SMB shares, so imaging load can be spread across several source points instead of hammering one NAS.
 
-**What it is:** a USB stick that boots a host machine straight to RAM (the stick can be pulled and reused elsewhere within seconds of boot), asks the operator for a name, lets them shave off a chunk of the host's existing Windows partition to host a share, copies the master image onto it, and serves it over SMB — visible both to other popup-nas boxes (a live "fleet" list) and, as far as possible, to Windows/WinPE imaging clients browsing the network.
+**What it is:** a USB stick that boots a host machine straight to RAM (the stick can be pulled and reused elsewhere within seconds of boot), asks the operator for a name, sets up one of the host's disks to hold a share, copies the master image (or any other files) onto it, and serves it over SMB — visible both to other popup-nas boxes (a live "fleet" list) and, as far as possible, to Windows/WinPE imaging clients browsing the network.
 
 No desktop GUI, no Cockpit, no DHCP/PXE server this time — this version does exactly one job. See `docs/architecture.md` for the full design and honest caveats (there are a few worth reading before you rely on this at a live event).
 
@@ -45,6 +45,40 @@ This is deliberately conservative:
 - A stick made the old way (a plain file copy, with no `.git` folder) simply doesn't self-update — nothing breaks, it just behaves exactly as it always has.
 
 No credentials of any kind ever need to live on a stick, since this repo is public.
+
+### Rolling back, and turning auto-update off (menu option 9)
+
+Menu option 9 is a version picker. It lists the last 12 releases of `stable` (newest first, each as a short code, version number, date and title) and offers:
+
+- **Latest stable** - the normal state: the stick updates itself at every boot. Choosing it turns auto-update back on and pulls the newest release straight away.
+- **Stay on THIS version** - turns auto-update off without changing version.
+- **A release from the list** - switches the stick to that release (a rollback, or going forward) and keeps it there with auto-update off.
+
+While a stick is pinned, the menu banner says `PINNED, NO AUTO-UPDATE` in amber and the boot-time update prints `Self-update is OFF`. Pinning also points the stick's `origin` at a path that does not exist, so even an older version of the program (from before this feature) cannot update a pinned stick by accident. The pin is a file, `autorun/popup-nas.pin`, that git ignores; `autorun/popup-nas.conf` and the share are never touched. With no network the picker still lists and switches between the releases the stick already has.
+
+### Setting up the share (menu option 2)
+
+Pick the disk to use. If it has no Windows (NTFS) partition on it, the whole disk becomes the share. If it does have one, you are offered a choice: shrink the Windows partition and keep Windows (not yet tried on real hardware), or **delete all partitions** on the disk and use it whole. The delete route shows every partition that will be destroyed in a red box, and the answer defaults to No. The stick the box booted from can never be chosen. If the box already has a share, setting up again asks first, because it erases what is on it.
+
+The share is open to everyone on the network: anyone can add, edit, move and delete files on it, including whole folders dragged in from a Mac or Windows PC. Security is not a goal of this tool.
+
+### Filling the share (menu option 3)
+
+Pick where the files come from: the NAS, another popup-nas box that already has files, a USB drive plugged into this box, or a path typed by hand. If the source holds files other than `.wim` images, you are asked what to copy:
+
+- **Pick .wim images** (the default; just press Enter) - tick images from a list.
+- **Pick any files** - tick files of any type from a list (up to 300 files).
+- **Copy everything new or changed (sync)** - no list; copies whatever is missing here or differs in size or time (up to 5000 files). Nothing on the share is ever deleted or renamed.
+
+`COPY_MODE=wim`, `all` or `sync` in `popup-nas.conf` answers that question in advance.
+
+**To stop a copy, press Q on the box's own keyboard** (do not use Ctrl+C there: on the box's console the SystemRescue launcher treats it as "abort the whole program" and drops you to a bare root prompt). A stopped or interrupted copy carries on from where it stopped when you choose the same source again. Each file is copied under a hidden name and renamed only when complete, so a file with its real name on the share is always a finished one, and the last 16 MiB of any half-finished copy is thrown away and redone before continuing.
+
+### A proper shell, and getting back to the menu
+
+Menu option 5 gives a normal interactive shell (prompt, arrow keys, Del); type `exit` to come back. SSH works too: log in as root and run `menu`, which restarts the program from the files already on the stick, so a test version or a version you picked in option 9 stays as it is. `menu fresh` is the old behaviour: it downloads a new copy of `stable` over the stick.
+
+Note for sticks pinned with option 9: the boot-time update step is skipped, so the stick is left read-only. To change files on it by hand over SSH, first run `mount -o remount,rw /mnt/popup-media`.
 
 ## Status
 
