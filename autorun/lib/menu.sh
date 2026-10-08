@@ -76,14 +76,14 @@ main_menu() {
     choice=$(NEWT_COLORS="$newt_colors" whiptail --backtitle "$backtitle" --title "popup-nas [$hostname_value] - $version" --default-item "$default_item" --menu "What do you want to do?" "$box_h" "$box_w" 11 \
       "1" "Show status screen (hostname, IP, fleet)" \
       "2" "Set up the SMB share (shrink NTFS, or use a wiped disk whole)" \
-      "3" "Fill the share: pick .wim files (NAS, another popup, USB)" \
+      "3" "Fill the share: pick images or files (NAS, another popup, USB)" \
       "4" "Reverse partitioning (delete share, restore original state)" \
       "5" "Drop to a shell" \
       "6" "Reboot" \
       "7" "Power off" \
       "-" " ------ Leave the stick IN to use the three below ------" \
       "8" "Make more sticks (build an ISO, or clone to a new USB)" \
-      "9" "Pull latest update now (no reboot needed)" \
+      "9" "Update or roll back: pick a version, auto-update on/off" \
       "10" "Change the NAS settings (path, login) and pick files" 3>&1 1>&2 2>&3)
     local rc=$?
     if [ -n "$badge_pid" ]; then
