@@ -38,6 +38,48 @@ part_dev() {
   echo "/dev/$name"
 }
 
+# Colours for a warning box that must not be missed: white on red, buttons
+# black on white (the chosen button white on black).
+WARN_RED_COLORS='root=white,red:window=white,red:border=white,red:shadow=black,black:title=white,red:button=black,white:actbutton=white,black:compactbutton=white,red:label=white,red:textbox=white,red:acttextbox=white,red:entry=black,white:checkbox=white,red:actcheckbox=black,white:listbox=white,red:actlistbox=black,white:sellistbox=black,white:actsellistbox=black,white'
+
+# True if disk $1 holds the stick this popup booted from (mounted as the
+# boot media), so "delete everything" can never be pointed at it.
+disk_is_boot_stick() {
+  lsblk -lno MOUNTPOINT "$1" 2>/dev/null | grep -qE '^(/mnt/popup-media|/run/archiso|/run/media/archiso)'
+}
+
+# Every partition on disk $1, one per line: name, size, filesystem, label.
+disk_partition_list() {
+  lsblk -lno NAME,SIZE,FSTYPE,LABEL "$1" 2>/dev/null | tail -n +2
+}
+
+# The "delete all and use it anyway" route: for a disk whose partitions can
+# not be shrunk (NTFS that will not resize, or anything else in the way).
+# Shows every partition that is about to be destroyed in a RED box, defaults
+# to No, then hands over to setup_share_whole_disk. $2 = why we are here.
+wipe_disk_anyway() {
+  local disk="$1" why="${2:-}" list
+  if disk_is_boot_stick "$disk"; then
+    whiptail --msgbox "$disk is the stick this popup booted from - it can not be wiped from here. Pick a different disk." 10 70
+    return 1
+  fi
+  list=$(disk_partition_list "$disk" | awk '{printf "  /dev/%s  %s  %s %s\n", $1, $2, $3, $4}' | head -n 8)
+  [ -n "$list" ] || list="  (no partitions listed)"
+  NEWT_COLORS="$WARN_RED_COLORS" whiptail --defaultno --title "DELETE EVERYTHING on $disk?" --yesno \
+    "${why:+$why\n\n}This DELETES EVERY PARTITION on $disk - including Windows and all the files on it - and makes the WHOLE disk the share. There is NO undo.\n\nThese will be destroyed:\n$list\n\nDelete everything and use the disk anyway?" \
+    21 78 || return 1
+  setup_share_whole_disk "$disk" confirmed
+}
+
+# Offered when shrinking Windows did not work: ask whether to give up on
+# keeping it and delete everything instead. Defaults to No.
+offer_wipe_instead() {
+  local disk="$1" why="$2"
+  whiptail --defaultno --title "Use the whole disk instead?" --yesno \
+    "$why\n\nIf you do not need what is on $disk, you can delete ALL its partitions and use the whole disk as the share instead.\n\nDo you want that?" 14 76 || return 1
+  wipe_disk_anyway "$disk" "$why"
+}
+
 setup_share() {
   local disk
   # A share that is already attached (set up earlier this boot, or found and
@@ -53,6 +95,15 @@ setup_share() {
 
   if ! has_ntfs_partition "$disk"; then
     setup_share_whole_disk "$disk"
+    return
+  fi
+
+  local how
+  how=$(whiptail --title "$disk has Windows (NTFS) on it" --menu "How should the share be made on $disk?" 14 78 2 \
+    "1" "Shrink the Windows partition and keep Windows (the usual way)" \
+    "2" "DELETE ALL PARTITIONS on $disk and use it anyway (no undo)" 3>&1 1>&2 2>&3) || return
+  if [ "$how" = 2 ]; then
+    wipe_disk_anyway "$disk" "You chose to delete everything instead of shrinking."
     return
   fi
 
@@ -87,6 +138,7 @@ setup_share() {
   echo "Shrinking $part to ${new_size_mb}MB, this can take a while..."
   if ! yes | ntfsresize --force --size "${new_size_mb}M" "$part"; then
     whiptail --msgbox "ntfsresize failed - nothing else was touched. Check the output above before retrying." 10 70
+    offer_wipe_instead "$disk" "Windows (NTFS) could not be shrunk on $disk." || true
     return
   fi
 
@@ -94,11 +146,13 @@ setup_share() {
   partnum=$(echo "$part" | grep -oP '[0-9]+$')
   if ! parted -s "$disk" resizepart "$partnum" "${new_size_mb}MiB"; then
     whiptail --msgbox "parted resizepart failed AFTER ntfsresize already shrank the filesystem. Run 'ntfsresize --info $part' before doing anything else on this disk." 12 78
+    offer_wipe_instead "$disk" "Resizing the partition table on $disk failed." || true
     return
   fi
 
   if ! parted -s "$disk" mkpart primary ext4 "${new_size_mb}MiB" 100%; then
     whiptail --msgbox "Failed to create the new partition. $disk's NTFS partition was already shrunk - check 'parted $disk print' before retrying." 12 78
+    offer_wipe_instead "$disk" "Creating the share partition on $disk failed." || true
     return
   fi
   partprobe "$disk" 2>/dev/null || true
@@ -124,15 +178,22 @@ setup_share() {
 # there's nothing on the disk worth keeping), this uses the whole disk
 # directly as the share.
 setup_share_whole_disk() {
-  local disk="$1"
+  local disk="$1" confirmed="${2:-}" pname
 
-  whiptail --title "No NTFS partition on $disk" --yesno \
-    "No NTFS partition was found on $disk - it looks wiped/blank (or was never Windows).\n\nUse the WHOLE disk as the share instead? This ERASES ANY EXISTING PARTITIONS OR DATA on $disk and turns it entirely into one share partition.\n\nContinue?" \
-    14 78 || return
+  if [ "$confirmed" != confirmed ]; then
+    whiptail --title "No NTFS partition on $disk" --yesno \
+      "No NTFS partition was found on $disk - it looks wiped/blank (or was never Windows).\n\nUse the WHOLE disk as the share instead? This ERASES ANY EXISTING PARTITIONS OR DATA on $disk and turns it entirely into one share partition.\n\nContinue?" \
+      14 78 || return
+  fi
 
   systemctl stop smb nmb 2>/dev/null || pkill -x smbd nmbd 2>/dev/null || true
   umount "$SHARE_MOUNT" 2>/dev/null || true
-
+  # Anything on this disk that got mounted by itself must be let go first,
+  # and the old filesystem signatures cleared, so nothing old shows through.
+  for pname in $(lsblk -lno NAME "$disk" 2>/dev/null | tail -n +2); do
+    umount "/dev/$pname" 2>/dev/null || true
+    wipefs -a "/dev/$pname" >/dev/null 2>&1 || true
+  done
   wipefs -a "$disk" >/dev/null 2>&1 || true
   if ! parted -s "$disk" mklabel gpt; then
     whiptail --msgbox "Failed to create a new partition table on $disk." 10 60

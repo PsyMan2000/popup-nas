@@ -120,6 +120,16 @@ menu() {
     echo "menu: \$root doesn't look like this box's boot media any more - check 'lsblk' by hand." >&2
     return 1
   fi
+  # By default just start the program again from the files already on the
+  # stick, so a test version or a version picked in menu option 9 stays as
+  # it is. Only "menu fresh" downloads $repo_branch and copies it over
+  # everything (found 2026-10-08: plain "menu" used to do that, and quietly
+  # replaced a test version with stable).
+  if [ "\${1:-}" != "fresh" ] && [ -f "\$root/autorun/autorun0" ]; then
+    echo "menu: starting again from the files already on this stick (type 'menu fresh' to download a new copy of $repo_branch over them)."
+    bash "\$root/autorun/autorun0"
+    return
+  fi
   fresh=\$(mktemp -d)
   if ! git clone --quiet --branch "$repo_branch" --single-branch "$repo_url" "\$fresh"; then
     echo "menu: couldn't clone $repo_url - check network and try again." >&2
@@ -154,6 +164,26 @@ if [ -z "${HERE:-}" ]; then
 fi
 export HERE
 LIB="$HERE/lib"
+
+# Stop the system writing its own messages over this program's menus on the
+# console. Two kinds (found on real hardware 2026-10-08, by photo):
+#  - systemd's status lines: "[ OK ] Started Session 1 of User root",
+#    "Created slice User Slice of UID 0" and the like. They come every time
+#    anyone logs in over SSH, so they landed on the menu mid-use. Switched off
+#    by sending systemd the "disable status messages" signal (RTMIN+21), which
+#    lasts until the next reboot. Only sent if the program running as process
+#    1 really is systemd.
+#  - the kernel's own messages (USB, disk, network): console level 1 = only real
+#    emergencies appear.
+# Nothing is lost: type 'dmesg' or 'journalctl' in a shell to read them.
+quiet_console_messages() {
+  dmesg -n 1 2>/dev/null || true
+  echo "1 4 1 7" > /proc/sys/kernel/printk 2>/dev/null || true
+  if [ "$(cat "${PID1_COMM_FILE:-/proc/1/comm}" 2>/dev/null)" = "systemd" ]; then
+    kill -s RTMIN+21 1 2>/dev/null || true
+  fi
+}
+quiet_console_messages
 
 # shellcheck source=lib/network.sh
 source "$LIB/network.sh"
