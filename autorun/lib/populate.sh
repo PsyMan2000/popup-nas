@@ -450,6 +450,30 @@ copy_progress_line() {
   copy_say '\r\033[K  %s of %s  (%d%%)  %s' "$(fmt_gb "$got")" "$(fmt_gb "$COPY_TOTAL")" "$pct" "$text"
 }
 
+# The terminal the copy screen is on. /dev/tty always means "the terminal
+# this program was started from", even when SystemRescue's launcher has
+# pointed this script's stdin, stdout or stderr somewhere else - which made
+# the older lookup (badge_tty_dev, below) come back empty on real hardware,
+# so Ctrl+C was never taken away from the terminal (seen 2026-10-08: it
+# killed the whole program and SystemRescue showed its "press any key"
+# countdown). The older lookup is kept as the fallback.
+copy_pick_tty() {
+  local d=""
+  if { : < /dev/tty; } 2>/dev/null; then echo /dev/tty; return 0; fi
+  if declare -F badge_tty_dev >/dev/null; then d=$(badge_tty_dev) || d=""; fi
+  [ -n "$d" ] || return 1
+  echo "$d"
+}
+
+# Switches the terminal's Ctrl+C signal off (so Ctrl+C arrives as an ordinary
+# key press) and the echo of typed keys. Called once before the copy and
+# again on every progress tick, so if anything switches the signal back on
+# it is off again within 2 seconds. Quick and silent.
+copy_isig_off() {
+  [ -n "${COPY_DEV:-}" ] || return 0
+  stty -isig -echo < "$COPY_DEV" 2>/dev/null || true
+}
+
 # Waits up to 2 seconds between progress updates. While the copy runs the
 # terminal's own Ctrl+C handling is switched off (see copy_wims_from_source),
 # because on the stick's console and in a VM console the Ctrl+C signal also
@@ -460,6 +484,7 @@ copy_progress_line() {
 copy_wait_key() {
   local key="" t0=$SECONDS
   if [ -n "${COPY_DEV:-}" ] && [ -r "$COPY_DEV" ]; then
+    copy_isig_off
     IFS= read -r -s -n 1 -t 2 key < "$COPY_DEV" 2>/dev/null
     case "$key" in
       $'\003'|q|Q|$'\033') COPY_STOP=1; return 0 ;;
@@ -658,18 +683,21 @@ copy_files_from_source() {
   fi
   whiptail --yesno "$what\n\nThe time left is worked out from the real speed once the copy has been running for about 20 seconds, and shown on the screen as it goes.\n\nPress Ctrl+C (or Q) to stop it. Run it again and it carries on from where it stopped." 17 74 || return
 
-  COPY_DEV=""
-  declare -F badge_tty_dev >/dev/null && COPY_DEV=$(badge_tty_dev) || true
+  COPY_DEV=$(copy_pick_tty) || COPY_DEV=""
   if [ -n "$COPY_DEV" ]; then clear > "$COPY_DEV" 2>/dev/null || clear; else clear; fi
   # Take Ctrl+C away from the terminal for the length of the copy, so it
   # arrives as a key press (see copy_wait_key) and can not end the menu.
   COPY_STTY=""
   if [ -n "$COPY_DEV" ]; then
-    COPY_STTY=$(stty -g < "$COPY_DEV" 2>/dev/null) && stty -isig -echo < "$COPY_DEV" 2>/dev/null || COPY_STTY=""
+    COPY_STTY=$(stty -g < "$COPY_DEV" 2>/dev/null) || COPY_STTY=""
+    copy_isig_off
   fi
   copy_say 'Copying from %s to %s ...\n' "$label" "$SHARE_MOUNT"
   copy_say 'Total to copy: %s.  Press Ctrl+C (or Q) to stop - it carries on later.\n' "$(fmt_gb "$needed")"
   : > /tmp/popup-copy.log
+  # A note for troubleshooting: which terminal was used, and whether the
+  # Ctrl+C signal really is off now (-isig = off; isig = still on).
+  echo "popup-nas copy: terminal=${COPY_DEV:-none} ctrl-c-signal-after-switching-off=$(stty -a < "${COPY_DEV:-/dev/null}" 2>/dev/null | grep -o -E '[-]?isig' | head -n1)" >> /tmp/popup-copy.log
   local n_done=0 rel dst part old failed="" stopped="" rc=0 now
   COPY_START=$(date +%s); COPY_TOTAL="$needed"; COPY_DONE_BASE=0
   COPY_T=("$COPY_START"); COPY_B=(0); COPY_STOP=0
@@ -691,6 +719,10 @@ copy_files_from_source() {
     have=$(stat -c %s "$part" 2>/dev/null || echo 0)
     copy_one_file "$IMAGE_MOUNT/$rel" "$part" "$have"
     rc=$?
+    # If Ctrl+C reached rsync directly (the terminal's signal was still on),
+    # rsync ends with code 20 (or 130 / 143). That is the operator stopping
+    # the copy on purpose, not a failure.
+    if [ "$COPY_STOP" -eq 1 ] && { [ "$rc" -eq 20 ] || [ "$rc" -eq 143 ] || [ "$rc" -eq 137 ]; }; then rc=130; fi
     if [ "$rc" -eq 0 ]; then
       mv -f "$part" "$dst" || rc=1
     fi
