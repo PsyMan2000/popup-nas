@@ -93,7 +93,7 @@ main_menu() {
     # purpose: whiptail reads any text starting with "--" as an option.
     choice=$(NEWT_COLORS="$newt_colors" whiptail --backtitle "$backtitle" --title "popup-nas [$hostname_value] - $version" --default-item "$default_item" --menu "What do you want to do?" "$box_h" "$box_w" 11 \
       "1" "Show status screen (hostname, IP, fleet)" \
-      "2" "Set up the SMB share (shrink NTFS, or use a wiped disk whole)" \
+      "2" "Set up the SMB share (pick the disk to use for it)" \
       "3" "Fill the share: pick images or files (NAS, another popup, USB)" \
       "4" "Reverse partitioning (delete share, restore original state)" \
       "5" "Drop to a shell" \
