@@ -1,12 +1,17 @@
-# Filling the share with master images (.wim files), and the NAS settings
-# that go with it.
+# Filling the share with master images (.wim files) or any other files, and
+# the NAS settings that go with it.
 #
 # The flow (menu option 3):
 #   1. Pick a SOURCE: the upstream NAS, another popup-nas on this network
-#      that already has images, a USB drive plugged into this box, or a
+#      that already has files, a USB drive plugged into this box, or a
 #      path typed by hand.
-#   2. The source is mounted read-only and its .wim files are listed with
-#      their sizes. Tick the ones this box needs.
+#   2. The source is mounted read-only. Its .wim files are listed with their
+#      sizes: tick the ones this box needs. If the source holds other files
+#      too, there is one extra question first (see choose_copy_mode): the
+#      .wim images as before (the default - just press Enter), pick any
+#      files from a list, or "sync" = copy everything that is new or changed.
+#      COPY_MODE=wim|all|sync in popup-nas.conf answers that question in
+#      advance. Nothing is ever deleted from the share.
 #   3. A free-space check, then each ticked file is copied into the share.
 #      A copy that is interrupted (a 350 GB file takes a while) carries on
 #      from where it stopped when run again - it does not start over.
@@ -27,7 +32,13 @@
 #     the same name in different folders can't overwrite each other. Normal
 #     use is .wim files at the root, where nothing changes.
 #   - No extra verification pass is run (it would double the time on a
-#     350 GB file).
+#     350 GB file). That is safe because of the next rule:
+#   - Before a half-finished copy is carried on, the LAST 16 MiB of it is cut
+#     off and copied again (trim_part_tail). Found 2026-10-07 with plain
+#     rsync: when rsync is stopped part-way (Ctrl+C, or the network drops)
+#     the last 256 KiB it wrote can be wrong, and --append trusts what is
+#     already there - so the finished file had one bad block, and everything
+#     reported success. (Seen in about 1 stop in 6.)
 
 IMAGE_MOUNT="/mnt/source"
 # How many characters of each image's file name are shown on the status
@@ -62,6 +73,17 @@ list_wims() {
   ( cd "$1" 2>/dev/null && find . -mindepth 1 -maxdepth 4 -name '.*' -prune -o -type f -iname '*.wim' -printf '%s\t%P\n' 2>/dev/null | sort -t "$(printf '\t')" -k2 )
 }
 
+# Lists the finished files of ANY type under folder $1, one per line:
+#   <size in bytes><TAB><path relative to $1>
+# $2 = how many levels deep to look (default 4). Same rules as list_wims:
+# hidden names (rsync's half-finished copies) are skipped. Also skipped:
+# folders that are never wanted data - lost+found (every ext4 share has one)
+# and the Windows System Volume Information and $RECYCLE.BIN.
+list_files() {
+  local depth="${2:-4}"
+  ( cd "$1" 2>/dev/null && find . -mindepth 1 -maxdepth "$depth" \( -name '.*' -o -name 'lost+found' -o -name 'System Volume Information' -o -name '$RECYCLE.BIN' \) -prune -o -type f -printf '%s\t%P\n' 2>/dev/null | sort -t "$(printf '\t')" -k2 )
+}
+
 # One-line summary of the images on THIS box's share, for the status
 # screen's IMAGES column: the first few characters of each image's name
 # (without ".wim"), then the total size, e.g. "Win11-Pr,Win10-Ed (45.3 GB)".
@@ -77,6 +99,24 @@ share_image_summary() {
       if (n > max) out = out ",+" (n - max)
       printf "%s (%.1f GB)\n", out, s / 1e9
     }'
+}
+
+# How much of the end of a half-finished copy is thrown away before it is
+# carried on (see the rules at the top). Re-copying 16 MiB takes a fraction
+# of a second.
+PART_TAIL_CUT=$((16 * 1024 * 1024))
+
+# Cuts the last PART_TAIL_CUT bytes off half-finished copy $1 (all of it, if
+# it is smaller than that), so the copy is carried on from a part that is
+# certainly right.
+trim_part_tail() {
+  local part="$1" size
+  size=$(stat -c %s "$part" 2>/dev/null) || return 0
+  if [ "$size" -gt "$PART_TAIL_CUT" ]; then
+    truncate -s $(( size - PART_TAIL_CUT )) "$part"
+  else
+    : > "$part"
+  fi
 }
 
 # The hidden name an unfinished copy of source file $1 (path relative to the
@@ -159,8 +199,10 @@ mount_typed_source() {
   fi
 }
 
-# Other popup-nas boxes seen on the network that have at least one image.
-# One line each:  name|ip|image count|GB|connections
+# Other popup-nas boxes seen on the network that have at least one file.
+# One line each:  name|ip|image count|image GB|connections|image names|file count|file GB
+# (file count = files of any type, .wim images included. A popup running an
+# older version doesn't report it, so its image count is used instead.)
 list_peer_sources() {
   python3 - "$FLEET_STATE" <<'PYEOF'
 import json, sys, time
@@ -172,11 +214,14 @@ now = time.time()
 for name, info in sorted(data.items()):
     if now - info.get("seen", 0) >= 30:
         continue
-    n = info.get("images")
-    if not n:
+    n = info.get("images") or 0
+    f = info.get("files")
+    if f is None:
+        f = n
+    if not n and not f:
         continue
     names = ",".join(info.get("image_names") or [])
-    print("|".join(str(x) for x in (name, info.get("ip", ""), n, info.get("images_gb", 0), info.get("connections", 0), names)))
+    print("|".join(str(x) for x in (name, info.get("ip", ""), n, info.get("images_gb", 0), info.get("connections", 0), names, f, info.get("files_gb", info.get("images_gb", 0)))))
 PYEOF
 }
 
@@ -243,7 +288,7 @@ populate_share() {
   # description in $PICKED_LABEL.
   [ -n "$source_label" ] || source_label="$PICKED_LABEL"
 
-  copy_wims_from_source "$source_label"
+  copy_files_from_source "$source_label"
   unmount_source
 }
 
@@ -251,7 +296,7 @@ populate_share() {
 # $IMAGE_MOUNT (description in PICKED_LABEL), or 1 if cancelled / failed.
 pick_source() {
   local -a kinds args menu_items
-  local i n line name ip cnt gb conn inames dev size label fs choice
+  local i n line name ip cnt gb conn inames fcnt fgb desc dev size label fs choice
   while true; do
     kinds=(); args=(); menu_items=()
     n=0
@@ -264,11 +309,17 @@ pick_source() {
       menu_items+=("$n" "NAS: not set up yet - choose this to set it up")
     fi
 
-    # 2. other popups that already have images
-    while IFS='|' read -r name ip cnt gb conn inames; do
+    # 2. other popups that already have files
+    while IFS='|' read -r name ip cnt gb conn inames fcnt fgb; do
       [ -n "$name" ] || continue
       n=$((n + 1)); kinds[$n]="peer"; args[$n]="$ip"
-      menu_items+=("$n" "Popup $name ($ip): ${inames:-$cnt image(s)} - ${gb} GB, $conn connected")
+      if [ "${cnt:-0}" -gt 0 ]; then
+        desc="${inames:-$cnt image(s)} - ${gb} GB"
+        [ "${fcnt:-$cnt}" -gt "$cnt" ] && desc="$desc (+$(( fcnt - cnt )) files)"
+      else
+        desc="${fcnt:-0} file(s) - ${fgb:-0} GB"
+      fi
+      menu_items+=("$n" "Popup $name ($ip): $desc, $conn connected")
     done < <(list_peer_sources)
 
     # 3. USB drives plugged into this box
@@ -284,7 +335,7 @@ pick_source() {
     n=$((n + 1)); kinds[$n]="refresh"
     menu_items+=("$n" "Look again (just plugged something in?)")
 
-    choice=$(whiptail --title "Where are the images coming from?" \
+    choice=$(whiptail --title "Where are the files coming from?" \
       --menu "Pick a source. Other popups and USB drives show up here by themselves." \
       $((n + 8 > 22 ? 22 : n + 8)) 78 "$((n > 14 ? 14 : n))" "${menu_items[@]}" 3>&1 1>&2 2>&3) || return 1
 
@@ -421,6 +472,19 @@ copy_wait_key() {
   fi
 }
 
+# A quick, non-blocking look for the stop key (Ctrl+C, Q or Esc) - used
+# BETWEEN files, so a long run of small files, each too quick to ever reach
+# copy_wait_key, can still be stopped.
+copy_check_stop() {
+  local key=""
+  { [ -n "${COPY_DEV:-}" ] && [ -r "$COPY_DEV" ]; } || return 0
+  IFS= read -r -s -n 1 -t 0.05 key < "$COPY_DEV" 2>/dev/null
+  case "$key" in
+    $'\003'|q|Q|$'\033') COPY_STOP=1 ;;
+  esac
+  return 0
+}
+
 # Copies source file $1 into the hidden part file $2 with rsync running in
 # the background, drawing the progress line while it runs. Ctrl+C (or Q)
 # stops the copy cleanly (the part file stays, so it can be continued) and returns
@@ -431,6 +495,11 @@ copy_one_file() {
   COPY_STOP=0
   rsync --times --append "$src" "$part" 2>>/tmp/popup-copy.log &
   pid=$!
+  # Small files are finished within a fraction of a second: look quickly
+  # first, so they don't each wait for a whole progress tick (copying a
+  # folder of 1000 small files would otherwise take half an hour longer).
+  local k
+  for k in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$COPY_STOP" -eq 1 ]; then
       kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
@@ -446,50 +515,127 @@ copy_one_file() {
   return "$rc"
 }
 
-# With a source mounted on $IMAGE_MOUNT: list its .wim files, let the
-# operator tick the ones to take, check there's room, and copy them.
+# True if file $1 (path relative to the source, $2 = its size) is already on
+# the share, finished. $3 = "strict" also compares the modification time:
+# rsync --times gives a copy the same time as its source, so a finished copy
+# always matches, and a changed source file doesn't. Used by "sync".
+file_already_here() {
+  local rel="$1" size="$2" strict="${3:-}" dsize
+  dsize=$(stat -c %s "$SHARE_MOUNT/$rel" 2>/dev/null) || return 1
+  [ "$dsize" = "$size" ] || return 1
+  if [ "$strict" = strict ]; then
+    [ "$(stat -c %Y "$SHARE_MOUNT/$rel" 2>/dev/null)" = "$(stat -c %Y "$IMAGE_MOUNT/$rel" 2>/dev/null)" ] || return 1
+  fi
+  return 0
+}
+
+# Asks what to copy from a source that holds other files besides .wim
+# images. Echoes wim, all or sync; returns 1 if cancelled. Item 1 (the
+# images, as before) is pre-selected, so just pressing Enter changes
+# nothing; with no .wim files at all, item 2 is.
+#   $1 = description of the source   $2 = how many .wim files it has
+choose_copy_mode() {
+  local label="$1" n_wim="$2" def=1 choice
+  [ "$n_wim" -eq 0 ] && def=2
+  choice=$(whiptail --title "What to copy from $label?" --default-item "$def" \
+    --menu "There are other files here as well as .wim images. What do you want?" 14 78 3 \
+    "1" "Pick .wim images (the usual choice)" \
+    "2" "Pick any files from a list (every file type)" \
+    "3" "Copy EVERYTHING new or changed (sync, deletes nothing)" 3>&1 1>&2 2>&3) || return 1
+  case "$choice" in
+    2) echo all ;;
+    3) echo sync ;;
+    *) echo wim ;;
+  esac
+}
+
+# With a source mounted on $IMAGE_MOUNT: list its files, let the operator
+# choose what to take, check there's room, and copy them.
+#   wim  = the .wim images, ticked from a list (the original behaviour)
+#   all  = files of any type, ticked from a list
+#   sync = no list: everything on the source that is missing here or has
+#          changed (a different size or time); files already here, and files
+#          that only exist on the share, are left alone
 # $1 = a short description of the source, for messages.
-copy_wims_from_source() {
-  local label="$1"
-  local -a w_size w_path menu_items
-  local size path shown i count=0 state note dest_size avail needed=0 sel rc n_sel=0 listing
+copy_files_from_source() {
+  local label="$1" mode="wim" noun="images" depth=4 strict="" skipped=0
+  local -a w_size w_path menu_items sel_idx=()
+  local size path shown i count=0 state note avail needed=0 sel n_sel=0 listing n_wim n_all have what
+
+  n_wim=$(list_wims "$IMAGE_MOUNT" | wc -l)
+  n_all=$(list_files "$IMAGE_MOUNT" | wc -l)
+  case "${COPY_MODE:-}" in
+    wim|all|sync) mode="$COPY_MODE" ;;
+    *) if [ "$n_all" -gt "$n_wim" ]; then mode=$(choose_copy_mode "$label" "$n_wim") || return; fi ;;
+  esac
+  case "$mode" in
+    all)  noun="files"; strict=strict ;;
+    sync) noun="files"; strict=strict; depth=8 ;;
+  esac
 
   while IFS=$'\t' read -r size path; do
     [ -n "$path" ] || continue
     count=$((count + 1))
     w_size[$count]="$size"; w_path[$count]="$path"
-  done < <(list_wims "$IMAGE_MOUNT")
+  done < <(if [ "$mode" = wim ]; then list_wims "$IMAGE_MOUNT"; else list_files "$IMAGE_MOUNT" "$depth"; fi)
 
   if [ "$count" -eq 0 ]; then
     listing=$(ls -1 "$IMAGE_MOUNT" 2>/dev/null | head -n 8 | tr '\n' ' ')
-    whiptail --msgbox "No .wim files found on $label (looked up to 4 folders deep).\n\nWhat is there: ${listing:-nothing visible}" 12 76
+    if [ "$mode" = wim ]; then
+      whiptail --msgbox "No .wim files found on $label (looked up to 4 folders deep).\n\nWhat is there: ${listing:-nothing visible}" 12 76
+    else
+      whiptail --msgbox "No files found on $label (looked up to $depth folders deep).\n\nWhat is there: ${listing:-nothing visible}" 12 76
+    fi
+    return
+  fi
+  if [ "$mode" = all ] && [ "$count" -gt 300 ]; then
+    whiptail --msgbox "$count files is too many to tick one by one.\n\nGo back and choose 'Copy EVERYTHING new or changed', or use 'Type a different path' to pick a smaller folder." 12 72
+    return
+  fi
+  if [ "$mode" = sync ] && [ "$count" -gt 5000 ]; then
+    whiptail --msgbox "$count files is too many to sync in one go (the limit is 5000).\n\nUse 'Type a different path' to pick a smaller folder, and do it in pieces." 12 72
     return
   fi
 
-  # Each row reads:  <size>  [already here] <path>. The size comes first and
-  # long paths are shortened from the LEFT (the file name is the useful end),
-  # so nothing important is ever pushed past the edge of the box.
-  for i in $(seq 1 "$count"); do
-    state="ON"; note=""; shown="${w_path[$i]}"
-    dest_size=$(stat -c %s "$SHARE_MOUNT/${w_path[$i]}" 2>/dev/null || echo "")
-    if [ -n "$dest_size" ] && [ "$dest_size" = "${w_size[$i]}" ]; then
-      state="OFF"; note="[already here] "
-    fi
-    [ "${#shown}" -gt 38 ] && shown="...${shown: -35}"
-    menu_items+=("$i" "$(printf '%9s' "$(fmt_gb "${w_size[$i]}")")  $note$shown" "$state")
-  done
-
   avail=$(df --output=avail -B1 "$SHARE_MOUNT" 2>/dev/null | tail -n1 | tr -d ' ')
-  sel=$(whiptail --title "Tick the images to copy from $label" \
-    --checklist "Space bar ticks or unticks. This share has $(fmt_gb "${avail:-0}") free." \
-    $((count + 9 > 22 ? 22 : count + 9)) 78 "$((count > 13 ? 13 : count))" "${menu_items[@]}" 3>&1 1>&2 2>&3) || return
 
-  # What is needed: the full size of each ticked file, less any unfinished
+  if [ "$mode" = sync ]; then
+    # No list to tick: take everything that is missing or changed.
+    whiptail --infobox "Comparing $count file(s) with this share..." 7 60
+    for i in $(seq 1 "$count"); do
+      if file_already_here "${w_path[$i]}" "${w_size[$i]}" strict; then
+        skipped=$((skipped + 1))
+      else
+        sel_idx+=("$i")
+      fi
+    done
+    if [ "${#sel_idx[@]}" -eq 0 ]; then
+      whiptail --msgbox "Everything on $label is already on this share and up to date ($count file(s) checked). Nothing to copy." 9 72
+      return
+    fi
+  else
+    # Each row reads:  <size>  [already here] <path>. The size comes first and
+    # long paths are shortened from the LEFT (the file name is the useful end),
+    # so nothing important is ever pushed past the edge of the box.
+    for i in $(seq 1 "$count"); do
+      state="ON"; note=""; shown="${w_path[$i]}"
+      if file_already_here "${w_path[$i]}" "${w_size[$i]}" "$strict"; then
+        state="OFF"; note="[already here] "
+      fi
+      [ "${#shown}" -gt 38 ] && shown="...${shown: -35}"
+      menu_items+=("$i" "$(printf '%9s' "$(fmt_gb "${w_size[$i]}")")  $note$shown" "$state")
+    done
+    sel=$(whiptail --title "Tick the $noun to copy from $label" \
+      --checklist "Space bar ticks or unticks. This share has $(fmt_gb "${avail:-0}") free." \
+      $((count + 9 > 22 ? 22 : count + 9)) 78 "$((count > 13 ? 13 : count))" "${menu_items[@]}" 3>&1 1>&2 2>&3) || return
+    for i in ${sel//\"/}; do
+      sel_idx+=("$i")
+    done
+  fi
+
+  # What is needed: the full size of each chosen file, less any unfinished
   # copy of it already on the share (that part will be continued, not redone).
-  local -a sel_idx=()
-  local have
-  for i in ${sel//\"/}; do
-    sel_idx+=("$i")
+  for i in "${sel_idx[@]}"; do
     have=$(stat -c %s "$(part_path "${w_path[$i]}")" 2>/dev/null || echo 0)
     needed=$((needed + w_size[i] - have))
     n_sel=$((n_sel + 1))
@@ -505,7 +651,12 @@ copy_wims_from_source() {
     return
   fi
 
-  whiptail --yesno "Copy $n_sel file(s), $(fmt_gb "$needed") still to copy, from $label to this share?\n\nThe time left is worked out from the real speed once the copy has been running for about 20 seconds, and shown on the screen as it goes.\n\nPress Ctrl+C (or Q) to stop it. Run it again and it carries on from where it stopped." 15 74 || return
+  if [ "$mode" = sync ]; then
+    what="Sync: copy $n_sel new or changed file(s), $(fmt_gb "$needed") still to copy ($skipped already up to date), from $label to this share?\n\nNothing on this share is deleted or renamed."
+  else
+    what="Copy $n_sel file(s), $(fmt_gb "$needed") still to copy, from $label to this share?"
+  fi
+  whiptail --yesno "$what\n\nThe time left is worked out from the real speed once the copy has been running for about 20 seconds, and shown on the screen as it goes.\n\nPress Ctrl+C (or Q) to stop it. Run it again and it carries on from where it stopped." 17 74 || return
 
   COPY_DEV=""
   declare -F badge_tty_dev >/dev/null && COPY_DEV=$(badge_tty_dev) || true
@@ -519,7 +670,7 @@ copy_wims_from_source() {
   copy_say 'Copying from %s to %s ...\n' "$label" "$SHARE_MOUNT"
   copy_say 'Total to copy: %s.  Press Ctrl+C (or Q) to stop - it carries on later.\n' "$(fmt_gb "$needed")"
   : > /tmp/popup-copy.log
-  local n_done=0 rel dst part old failed="" stopped="" have rc=0 now
+  local n_done=0 rel dst part old failed="" stopped="" rc=0 now
   COPY_START=$(date +%s); COPY_TOTAL="$needed"; COPY_DONE_BASE=0
   COPY_T=("$COPY_START"); COPY_B=(0); COPY_STOP=0
   trap 'COPY_STOP=1' INT
@@ -528,12 +679,15 @@ copy_wims_from_source() {
     dst="$SHARE_MOUNT/$rel"
     part=$(part_path "$rel")
     n_done=$((n_done + 1))
+    copy_check_stop
+    if [ "$COPY_STOP" -eq 1 ]; then stopped="$rel"; break; fi
     copy_say '\n[%s of %s] %s\n' "$n_done" "$n_sel" "$rel"
     mkdir -p "$(dirname "$dst")"
     # Half-copies of an OLDER version of this same file are no use any more.
     for old in "$(dirname "$dst")/.$(basename "$dst")."*.part; do
       [ -e "$old" ] && [ "$old" != "$part" ] && rm -f "$old"
     done
+    [ -e "$part" ] && trim_part_tail "$part"
     have=$(stat -c %s "$part" 2>/dev/null || echo 0)
     copy_one_file "$IMAGE_MOUNT/$rel" "$part" "$have"
     rc=$?
@@ -546,6 +700,9 @@ copy_wims_from_source() {
   done
   trap - INT
   [ -n "$COPY_STTY" ] && stty "$COPY_STTY" < "$COPY_DEV" 2>/dev/null
+  # What this copy made is owned by root; open it up so people connecting
+  # over SMB can add to, edit and delete it.
+  if declare -F share_fix_permissions >/dev/null; then share_fix_permissions "$SHARE_MOUNT"; fi
 
   now=$(date +%s)
   if [ -n "$stopped" ]; then
@@ -553,11 +710,14 @@ copy_wims_from_source() {
   elif [ -z "$failed" ]; then
     local secs=$(( now - COPY_START )) avg=0
     [ "$secs" -gt 0 ] && avg=$(( COPY_DONE_BASE / secs ))
-    whiptail --msgbox "Copy finished: $n_sel file(s), $(fmt_gb "$COPY_DONE_BASE") in $(( (secs + 59) / 60 )) minute(s), average $(fmt_speed "$avg").\n\nThe other popups on this network will see these images in their list within a few seconds." 12 70
+    whiptail --msgbox "Copy finished: $n_sel file(s), $(fmt_gb "$COPY_DONE_BASE") in $(( (secs + 59) / 60 )) minute(s), average $(fmt_speed "$avg").\n\nThe other popups on this network will see these files in their list within a few seconds." 12 70
   else
     whiptail --msgbox "The copy stopped at $failed (code $rc). Nothing is lost: choose the same source again and it will carry on from where it stopped.\n\nWhat rsync said:\n$(tail -n 3 /tmp/popup-copy.log | cut -c1-66)" 17 72
   fi
 }
+
+# The name older code and the tests use for the same thing.
+copy_wims_from_source() { copy_files_from_source "$@"; }
 
 # ------------------------------------------------------- NAS settings
 
