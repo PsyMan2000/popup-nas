@@ -1,3 +1,21 @@
+# Menu option 5: a proper interactive shell. Found on real hardware
+# 2026-10-08: a plain "bash" here showed no prompt and arrow keys / Del came
+# out as ^[[A and ^[[3~, because SystemRescue's launcher sends this program's
+# output through pipes, and bash only switches its prompt and line editing
+# on when its input AND its error output are both a real terminal. So the
+# shell is pointed at /dev/tty (the real screen/keyboard) explicitly, and
+# started with -i (interactive). Without a /dev/tty it falls back to the old
+# plain "bash".
+drop_to_shell() {
+  clear
+  echo "Type 'exit' to come back to this menu."
+  if { : </dev/tty; } 2>/dev/null; then
+    bash -i </dev/tty >/dev/tty 2>&1
+  else
+    bash
+  fi
+}
+
 ask_hostname() {
   local default_name="popup-$(tr -dc 'a-z0-9' </dev/urandom | head -c4)"
   whiptail --title "popup-nas" --inputbox \
@@ -98,7 +116,7 @@ main_menu() {
       2) setup_share ;;
       3) populate_share ;;
       4) reverse_share ;;
-      5) clear; echo "Type 'exit' to come back to this menu."; bash ;;
+      5) drop_to_shell ;;
       6) reboot ;;
       7) poweroff ;;
       -) default_item=8 ;;

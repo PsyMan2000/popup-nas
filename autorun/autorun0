@@ -165,6 +165,12 @@ fi
 export HERE
 LIB="$HERE/lib"
 
+# Stop the kernel writing its own messages (USB, disk, network and the like)
+# over this program's menus on the console. Level 1 = only real emergencies
+# still appear. They are all still kept: type 'dmesg' to read them.
+dmesg -n 1 2>/dev/null || true
+echo "1 4 1 7" > /proc/sys/kernel/printk 2>/dev/null || true
+
 # shellcheck source=lib/network.sh
 source "$LIB/network.sh"
 # shellcheck source=lib/selfupdate.sh
@@ -215,7 +221,7 @@ case $? in
        echo "Found the share from before and shared it again: $(share_image_summary)"
        sleep 3
      fi ;;
-  2) whiptail --msgbox "An earlier share was found on this machine but could not be re-attached:\n\n$(printf '%s' "$REATTACH_ERR" | head -n 3 | fold -s -w 66)\n\nNothing was changed. Menu option 2 sets up a new share (that erases the disk)." 14 72 ;;
+  2) whiptail --msgbox "An earlier share was found on this machine but could not be re-attached:\n\n$(printf '%s' "$REATTACH_ERR" | head -n 3 | fold -s -w 66)\n\nNothing was changed. Menu option 2 sets up a new share (that erases the disk))." 14 72 ;;
 esac
 
 start_fleet_broadcast "$HOSTNAME_VALUE"
