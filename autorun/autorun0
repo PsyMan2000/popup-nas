@@ -221,7 +221,7 @@ case $? in
        echo "Found the share from before and shared it again: $(share_image_summary)"
        sleep 3
      fi ;;
-  2) whiptail --msgbox "An earlier share was found on this machine but could not be re-attached:\n\n$(printf '%s' "$REATTACH_ERR" | head -n 3 | fold -s -w 66)\n\nNothing was changed. Menu option 2 sets up a new share (that erases the disk))." 14 72 ;;
+  2) whiptail --msgbox "An earlier share was found on this machine but could not be re-attached:\n\n$(printf '%s' "$REATTACH_ERR" | head -n 3 | fold -s -w 66)\n\nNothing was changed. Menu option 2 sets up a new share (that erases the disk)." 14 72 ;;
 esac
 
 start_fleet_broadcast "$HOSTNAME_VALUE"
