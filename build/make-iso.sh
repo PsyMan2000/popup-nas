@@ -8,6 +8,11 @@
 #
 # Usage: ./make-iso.sh /path/to/systemrescue.iso /path/to/popup-nas.srm /path/to/popup-nas.iso
 #
+# Write "auto" instead of the .srm path to have it downloaded from this
+# repo's GitHub Release (and checked against its SHA-256) rather than
+# copying the file off another stick:
+#   ./make-iso.sh /path/to/systemrescue.iso auto /path/to/popup-nas.iso
+#
 # Needs sysrescue-customize on PATH, plus its own dependencies (xorriso,
 # mksquashfs). It's preinstalled if you run this from inside a booted
 # SystemRescue system. On Windows, WSL works too:
@@ -21,7 +26,8 @@
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
-  echo "Usage: $0 systemrescue.iso popup-nas.srm popup-nas.iso" >&2
+  echo "Usage: $0 systemrescue.iso popup-nas.srm|auto popup-nas.iso" >&2
+  echo "  (auto = download popup-nas.srm from the GitHub Release)" >&2
   exit 1
 fi
 
@@ -30,6 +36,16 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"
 
 [ -f "$SRC_ISO" ] || { echo "$SRC_ISO not found" >&2; exit 1; }
+if [ "$SRM" = auto ]; then
+  # Same download-and-check code the stick's own menu uses (fetch_srm in
+  # autorun/lib/build.sh).
+  BUILD_CACHE="${BUILD_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/popup-nas-build}"
+  # shellcheck source=../autorun/lib/build.sh
+  source "$REPO_ROOT/autorun/lib/build.sh"
+  echo "Downloading popup-nas.srm from the GitHub Release..."
+  SRM=$(fetch_srm) || { echo "Couldn't download popup-nas.srm (see $BUILD_CACHE/srm-download.log) - check the network, or pass the file instead of 'auto'." >&2; exit 1; }
+  echo "Got it: $SRM"
+fi
 [ -f "$SRM" ] || { echo "$SRM not found" >&2; exit 1; }
 command -v sysrescue-customize >/dev/null 2>&1 || {
   echo "sysrescue-customize not found on PATH - see build/README.md for how to get it." >&2

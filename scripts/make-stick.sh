@@ -1,6 +1,10 @@
 #!/bin/bash
 # make-stick.sh: write a complete, ready-to-boot popup-nas USB stick.
-# Usage: ./make-stick.sh /dev/sdX /path/to/systemrescue.iso /path/to/popup-nas.srm
+# Usage: ./make-stick.sh /dev/sdX /path/to/systemrescue.iso [/path/to/popup-nas.srm]
+#
+# The .srm can be left out (or written as "auto"): it is then downloaded
+# from this repo's GitHub Release and checked against its SHA-256, so it never
+# needs copying off another stick.
 #
 # Clones this repo's "stable" branch straight onto the stick (rather than
 # copying this local checkout's files), so the result is a real git
@@ -12,18 +16,29 @@
 # self-update until it's rebuilt from an online machine.
 set -euo pipefail
 
-if [ "$#" -ne 3 ]; then
-  echo "Usage: $0 /dev/sdX systemrescue.iso popup-nas.srm" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+  echo "Usage: $0 /dev/sdX systemrescue.iso [popup-nas.srm | auto]" >&2
+  echo "  (leave the .srm out, or say auto, to download it from the GitHub Release)" >&2
   exit 1
 fi
 
-DEV="$1"; ISO="$2"; SRM="$3"
+DEV="$1"; ISO="$2"; SRM="${3:-auto}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UPDATE_REPO_URL="${UPDATE_REPO_URL:-https://github.com/PsyMan2000/popup-nas.git}"
 UPDATE_BRANCH="${UPDATE_BRANCH:-stable}"
 
 [ -b "$DEV" ] || { echo "$DEV is not a block device" >&2; exit 1; }
 [ -f "$ISO" ] || { echo "$ISO not found" >&2; exit 1; }
+if [ "$SRM" = auto ]; then
+  # Same download-and-check code the stick's own menu uses (fetch_srm in
+  # autorun/lib/build.sh). Done now, before anything on the stick is touched.
+  BUILD_CACHE="${BUILD_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/popup-nas-build}"
+  # shellcheck source=../autorun/lib/build.sh
+  source "$HERE/../autorun/lib/build.sh"
+  echo "Downloading popup-nas.srm from the GitHub Release..."
+  SRM=$(fetch_srm) || { echo "Couldn't download popup-nas.srm (see $BUILD_CACHE/srm-download.log) - check the network, or pass the file as the third argument." >&2; exit 1; }
+  echo "Got it: $SRM"
+fi
 [ -f "$SRM" ] || { echo "$SRM not found" >&2; exit 1; }
 
 echo "THIS WILL ERASE EVERYTHING on $DEV:"
