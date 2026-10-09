@@ -144,6 +144,39 @@ menu() {
 EOF
 }
 
+# Writes the "stopx" command, for when the SystemRescue desktop (menu option 5,
+# then "startx") gets stuck. Found on real hardware 2026-10-09: choosing Log Out
+# on that desktop shows "Session manager must be in idle state when requesting a
+# shutdown" and the desktop never closes, leaving the box stuck. Killing xinit
+# (the program startx runs) is what fixed it, so "stopx" does exactly that. It is
+# a real program in /usr/local/bin (not a shell function) so it works from the
+# box's own shell, from a terminal inside the desktop, and over SSH - where it
+# is usually needed, because the box's own keyboard is stuck on the desktop.
+write_stopx_helper() {
+  mkdir -p /usr/local/bin
+  cat > /usr/local/bin/stopx <<'EOF'
+#!/bin/bash
+# Written by popup-nas's autorun0 at boot - see write_stopx_helper there.
+# Closes the SystemRescue desktop (the one started with "startx") so the box
+# goes back to its shell and then the popup-nas menu.
+if ! pgrep xinit >/dev/null 2>&1; then
+  echo "stopx: no desktop is running, nothing to stop."
+  exit 0
+fi
+pkill xinit
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  pgrep xinit >/dev/null 2>&1 || break
+  sleep 0.5
+done
+if pgrep xinit >/dev/null 2>&1; then
+  echo "stopx: the desktop did not close - try again, or run: pkill -9 xinit" >&2
+  exit 1
+fi
+echo "stopx: desktop closed. The box's screen should be back at its shell - type 'exit' there to get to the menu."
+EOF
+  chmod +x /usr/local/bin/stopx
+}
+
 HERE="$(find_media_root)"
 if [ -z "${HERE:-}" ]; then
   HERE="$(scan_all_partitions)"
@@ -220,6 +253,7 @@ self_update
 # REPO ROOT one level up from that (see its own comment above), the same
 # way self_update() works out repo_root for itself in lib/selfupdate.sh.
 write_ssh_menu_helper "$(cd "$HERE/.." 2>/dev/null && pwd)"
+write_stopx_helper
 
 HOSTNAME_VALUE=$(ask_hostname)
 hostnamectl set-hostname "$HOSTNAME_VALUE" 2>/dev/null || true
