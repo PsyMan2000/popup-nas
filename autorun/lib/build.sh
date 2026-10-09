@@ -5,7 +5,9 @@
 # how this was worked out (live-boot source discovery, the symlink gotcha,
 # the ISO download URL).
 
-BUILD_CACHE="/root/.cache/popup-nas-build"
+# (Overridable: the PC-side scripts in scripts/ and build/ set their own, because
+# /root is not writable there.)
+BUILD_CACHE="${BUILD_CACHE:-/root/.cache/popup-nas-build}"
 
 # Fallback source ISO if popup-nas.conf doesn't set SYSRESCUE_ISO_URL. Keep
 # this matching whatever SystemRescue version this stick itself is built
@@ -22,6 +24,21 @@ DEFAULT_SYSRESCUE_ISO_URL="https://fastly-cdn.system-rescue.org/releases/13.02/s
 # upgraded, update this to the matching writer release at the same time
 # (list: https://gitlab.com/systemrescue/systemrescue-usbwriter/-/releases).
 DEFAULT_SYSRESCUE_USBWRITER_URL="https://fastly-cdn.system-rescue.org/download/usbwriter/1.1.1/sysrescueusbwriter-x86_64.AppImage"
+
+# Where popup-nas.srm (the Samba/git/etc. module) is downloaded from when a
+# stick or ISO needs one and there isn't a copy to hand - so a new stick never
+# needs the file copied off an existing stick. It is a GitHub Release asset
+# on the PUBLIC repo; the Release tag is "srm-<SystemRescue version>". The
+# SHA-256 is checked after every download, so a damaged or wrong file is
+# rejected rather than baked into a stick. When SystemRescue is upgraded:
+# build a new .srm (build/README.md), publish it as a new Release (tag
+# srm-<new version>, file name exactly popup-nas.srm), and update BOTH lines
+# below together with DEFAULT_SYSRESCUE_ISO_URL and
+# DEFAULT_SYSRESCUE_USBWRITER_URL above. popup-nas.conf can override them
+# with SRM_URL (and SRM_SHA256; with SRM_URL set and no SRM_SHA256 only the
+# "is it a SquashFS file" check is done).
+DEFAULT_SRM_URL="https://github.com/PsyMan2000/popup-nas/releases/download/srm-13.02/popup-nas.srm"
+DEFAULT_SRM_SHA256="c0a4522c390485dc42235309a259647e88455481265138cd5b89f6d5889a8527"
 
 # Finds the root of the currently-booted medium (where autorun/,
 # sysrescue.d/ and popup-nas.srm live). Tries the normal archiso mount
@@ -60,6 +77,62 @@ find_srm() {
     [ -f "$candidate" ] && { echo "$candidate"; return 0; }
   done
   find "$root" -maxdepth 3 -iname 'popup-nas.srm' 2>/dev/null | head -n1
+}
+
+# True if $1 looks like a real popup-nas.srm: a SquashFS file (they start
+# with "hsqs") of a plausible size and, if $2 is given, with exactly that
+# SHA-256. Says why on stderr if not.
+srm_ok() {
+  local f="$1" want="${2:-}" got
+  [ -s "$f" ] || { echo "empty or missing file" >&2; return 1; }
+  [ "$(head -c 4 "$f" 2>/dev/null)" = "hsqs" ] || { echo "not a SquashFS file (a failed download or an error page?)" >&2; return 1; }
+  [ "$(stat -c %s "$f" 2>/dev/null || echo 0)" -gt 1000000 ] || { echo "file is too small to be popup-nas.srm" >&2; return 1; }
+  if [ -n "$want" ]; then
+    got=$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1)
+    [ "$got" = "$(echo "$want" | tr '[:upper:]' '[:lower:]')" ] || { echo "checksum is $got, expected $want" >&2; return 1; }
+  fi
+  return 0
+}
+
+# Downloads popup-nas.srm from the GitHub Release (see DEFAULT_SRM_URL) into
+# the build cache and checks it with srm_ok. Echoes the path and returns 0
+# on success; returns 1, leaving nothing behind, if the download fails or
+# the file is not the right one (why: $BUILD_CACHE/srm-download.log). A copy
+# already downloaded earlier is reused if it still checks out. Deliberately
+# silent (no whiptail), so scripts/make-stick.sh and build/make-iso.sh can
+# use it too; its callers draw the "downloading..." message.
+fetch_srm() {
+  local url="${SRM_URL:-$DEFAULT_SRM_URL}" want dest tmp log
+  if [ -n "${SRM_URL:-}" ]; then want="${SRM_SHA256:-}"; else want="${SRM_SHA256:-$DEFAULT_SRM_SHA256}"; fi
+  mkdir -p "$BUILD_CACHE" 2>/dev/null || return 1
+  dest="$BUILD_CACHE/popup-nas.srm"
+  tmp="$dest.part"
+  log="$BUILD_CACHE/srm-download.log"
+  if [ -f "$dest" ] && srm_ok "$dest" "$want" >/dev/null 2>&1; then
+    echo "$dest"
+    return 0
+  fi
+  rm -f "$dest" "$tmp"
+  if curl -fL --retry 2 --connect-timeout 15 -o "$tmp" "$url" 2>"$log" && srm_ok "$tmp" "$want" 2>>"$log"; then
+    mv "$tmp" "$dest" && { echo "$dest"; return 0; }
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+# This stick's own popup-nas.srm (find_srm) or, if it has none, the
+# published one downloaded by fetch_srm. Echoes the path; returns 1 if
+# neither works. >&2 on the box: this function's stdout is captured by its
+# callers (see ensure_source_iso for the same gotcha).
+ensure_srm() {
+  local root="$1" srm
+  srm=$(find_srm "$root")
+  if [ -n "$srm" ] && [ -f "$srm" ]; then
+    echo "$srm"
+    return 0
+  fi
+  whiptail --infobox "This stick has no popup-nas.srm - downloading it from GitHub (about 33 MB)..." 8 70 >&2
+  fetch_srm
 }
 
 # Finds SystemRescue's official USB writer (a single .AppImage file) - the
@@ -229,9 +302,8 @@ build_popup_iso() {
     whiptail --msgbox "Couldn't find this stick's own autorun/sysrescue.d folders - can't build from here." 10 70
     return
   }
-  srm=$(find_srm "$root")
-  [ -n "$srm" ] && [ -f "$srm" ] || {
-    whiptail --msgbox "Couldn't find popup-nas.srm anywhere on this stick (checked $root/sysresccd/ and $root/ directly) - this stick doesn't have the SRM module baked in." 10 76
+  srm=$(ensure_srm "$root") || {
+    whiptail --msgbox "Couldn't find popup-nas.srm on this stick (checked $root/sysresccd/ and $root/ directly), and downloading it from GitHub failed too - check the network and try again. Nothing has been touched.\n\nWhy it failed: $BUILD_CACHE/srm-download.log" 14 78
     return
   }
 
@@ -341,9 +413,8 @@ make_new_stick() {
     whiptail --msgbox "Couldn't find this stick's own autorun/sysrescue.d folders - can't build from here." 10 70
     return
   }
-  srm=$(find_srm "$root")
-  [ -n "$srm" ] && [ -f "$srm" ] || {
-    whiptail --msgbox "Couldn't find popup-nas.srm anywhere on this stick (checked $root/sysresccd/ and $root/ directly) - this stick doesn't have the SRM module baked in." 10 76
+  srm=$(ensure_srm "$root") || {
+    whiptail --msgbox "Couldn't find popup-nas.srm on this stick (checked $root/sysresccd/ and $root/ directly), and downloading it from GitHub failed too - check the network and try again. Nothing has been touched.\n\nWhy it failed: $BUILD_CACHE/srm-download.log" 14 78
     return
   }
 
