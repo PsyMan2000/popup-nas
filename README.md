@@ -58,7 +58,7 @@ While a stick is pinned, the menu banner says `PINNED, NO AUTO-UPDATE` in amber 
 
 ### Setting up the share (menu option 2)
 
-Pick the disk to use. If it has no Windows (NTFS) partition on it, the whole disk becomes the share. If it does have one, you are offered a choice: shrink the Windows partition and keep Windows (not yet tried on real hardware), or **delete all partitions** on the disk and use it whole. The delete route shows every partition that will be destroyed in a red box, and the answer defaults to No. The stick the box booted from can never be chosen. If the box already has a share, setting up again asks first, because it erases what is on it.
+Pick the disk to use. If the disk is blank you are asked once. If it has anything on it (Windows or anything else), a **red box** lists every partition that will be destroyed and asks whether to **delete everything and use the whole disk** as the share. The answer defaults to No, and there is no undo. (A "shrink Windows and keep it" route used to exist; it did not work on real PCs, so it was removed in 1.5.10. To keep Windows, use a different disk.) The stick the box booted from can never be chosen. If the box already has a share, setting up again asks first, because it erases what is on it.
 
 The share is open to everyone on the network: anyone can add, edit, move and delete files on it, including whole folders dragged in from a Mac or Windows PC. Security is not a goal of this tool.
 
@@ -76,13 +76,13 @@ Pick where the files come from: the NAS, another popup-nas box that already has 
 
 ### A proper shell, and getting back to the menu
 
-Menu option 5 gives a normal interactive shell (prompt, arrow keys, Del); type `exit` to come back. SSH works too: log in as root and run `menu`, which restarts the program from the files already on the stick, so a test version or a version you picked in option 9 stays as it is. `menu fresh` is the old behaviour: it downloads a new copy of `stable` over the stick.
+Menu option 5 gives a normal interactive shell (prompt, arrow keys, Del); type `exit` to come back. Type `startx` in it to start the SystemRescue desktop (close the desktop to get back to the shell). SSH works too: log in as root and run `menu`, which restarts the program from the files already on the stick, so a test version or a version you picked in option 9 stays as it is. `menu fresh` is the old behaviour: it downloads a new copy of `stable` over the stick.
 
 Note for sticks pinned with option 9: the boot-time update step is skipped, so the stick is left read-only. To change files on it by hand over SSH, first run `mount -o remount,rw /mnt/popup-media`.
 
 ## Status
 
-First real-hardware boot confirmed working: it boots straight to RAM with no boot-menu editing needed, finds its own scripts, and reaches the working menu. The wiped-disk share path (no existing NTFS partition) has been confirmed working on a real external SSD, including reversing it back to blank. The NTFS-shrink path (a disk that already has Windows on it) is currently deprioritised — see `docs/architecture.md`.
+First real-hardware boot confirmed working: it boots straight to RAM with no boot-menu editing needed, finds its own scripts, and reaches the working menu. The wiped-disk share path (no existing NTFS partition) has been confirmed working on a real external SSD, including reversing it back to blank. A disk that already has Windows on it is handled by deleting everything on it (the shrink-Windows route was removed in 1.5.10 because it did not work on real PCs).
 
 ## How it's built
 

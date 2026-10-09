@@ -9,6 +9,7 @@
 drop_to_shell() {
   clear
   echo "Type 'exit' to come back to this menu."
+  echo "Type 'startx' for the SystemRescue desktop (close it to return here)."
   if { : </dev/tty; } 2>/dev/null; then
     bash -i </dev/tty >/dev/tty 2>&1
   else
@@ -96,7 +97,7 @@ main_menu() {
       "2" "Set up the SMB share (pick the disk to use for it)" \
       "3" "Fill the share: pick images or files (NAS, another popup, USB)" \
       "4" "Reverse partitioning (delete share, restore original state)" \
-      "5" "Drop to a shell" \
+      "5" "Drop to a shell (startx for systemrescue)" \
       "6" "Reboot" \
       "7" "Power off" \
       "-" " ------ Leave the stick IN to use the three below ------" \
