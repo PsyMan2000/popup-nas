@@ -10,6 +10,7 @@ drop_to_shell() {
   clear
   echo "Type 'exit' to come back to this menu."
   echo "Type 'startx' for the SystemRescue desktop (close it to return here)."
+  echo "If the desktop gets stuck, log in from another PC with SSH (user root) and type 'stopx'."
   if { : </dev/tty; } 2>/dev/null; then
     bash -i </dev/tty >/dev/tty 2>&1
   else
