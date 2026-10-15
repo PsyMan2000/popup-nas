@@ -1,112 +1,168 @@
-# popup-deploy-nas — v2: pop-up SMB relief shares
+# popup-nas: pop-up SMB relief shares
 
-**The problem this solves:** when imaging a lot of PCs at once over PXE/USB into Ninja One, the central NAS serving the master image can become the bottleneck. This tool turns spare PCs on the same LAN into temporary, disposable "relief" SMB shares, so imaging load can be spread across several source points instead of hammering one NAS.
+**The problem this solves:** when you image a lot of PCs at once (PXE or USB, into NinjaOne), the one NAS holding the master image becomes the bottleneck. popup-nas turns spare PCs on the same network into temporary, disposable SMB shares ("relief shares") that hold a copy of the image, so the load is spread over several machines instead of hitting one.
 
-**What it is:** a USB stick that boots a host machine straight to RAM (the stick can be pulled and reused elsewhere within seconds of boot), asks the operator for a name, sets up one of the host's disks to hold a share, copies the master image (or any other files) onto it, and serves it over SMB — visible both to other popup-nas boxes (a live "fleet" list) and, as far as possible, to Windows/WinPE imaging clients browsing the network.
+**What it is:** a USB stick. You boot a spare PC from it. The PC loads everything into RAM (so you can pull the stick out again within seconds), asks you to name it, sets up one of its disks as a share, copies the master image onto it, and serves it over SMB. Other popup-nas boxes see it in a live "fleet" list, and Windows/WinPE imaging clients can browse to it.
 
-No desktop GUI, no Cockpit, no DHCP/PXE server this time — this version does exactly one job. See `docs/architecture.md` for the full design and honest caveats (there are a few worth reading before you rely on this at a live event).
+**What it is built on:** [SystemRescue](https://www.system-rescue.org/), a free rescue Linux that already boots to RAM and already has the disk tools we need. We do not make our own Linux. We add three things on top of a normal SystemRescue stick:
 
-This is the **public distribution repo**: self-updating sticks pull from this repo's `stable` branch (see "Self-updating sticks" below). Day-to-day development happens elsewhere; this repo only gets updated deliberately, once a change is trusted.
+1. `autorun/`: our scripts (the menu, partitioning, Samba, fleet list, self-update).
+2. `sysrescue.d/`: one small settings file that makes SystemRescue boot to RAM and load our add-on automatically.
+3. `popup-nas.srm`: an add-on module that contains Samba and a few other programs (about 33 MB). It is built once and reused.
 
-## TLDR: from an Etcher-flashed stick to a test boot
+There is no desktop, no Cockpit and no DHCP/PXE server. It does one job. Honest caveats are in `docs/architecture.md`; read them before you rely on this at a live event. Security is not a goal: the share is open to everyone on the network.
 
-You've already used balenaEtcher to write the official SystemRescue ISO onto a USB stick. Here's exactly what's left to do a first test boot.
+This is the **public** repo. Sticks update themselves from its `stable` branch (see "Updates" below).
 
-1. **Eject the stick from Etcher, then unplug and replug it** so Windows mounts it fresh.
-2. **Open File Explorer and find the stick's drive.** It should show SystemRescue's own files/folders (things like `sysresccd`, `boot`, `EFI`). If a "You need to format this disk" popup appears for some *other* new volume Windows noticed on the same stick, click **Cancel** — don't format anything on it.
-   - If you can't find any writable drive letter for it at all (Windows only shows it like a read-only CD), stop here — Etcher's raw write may not have left a writable area the easy way, and you'd need SystemRescue's own USB-writer tool instead.
-3. **Get this repo's `stable` branch onto your PC.** Easiest way: on this repo's page, click **Code → Download ZIP**, and unzip it somewhere. (Or `git clone --branch stable` it — see "Self-updating sticks" below for why `stable` specifically.)
-4. **Copy the `autorun` folder and the `sysrescue.d` folder** (both from the unzipped repo) into the **root** of the SystemRescue drive, so you end up with, for example, `E:\autorun\autorun0`, `E:\autorun\lib\...`, and `E:\sysrescue.d\200-popup-nas.yaml` — none of them nested inside another folder. You don't need to rename the drive itself — whatever label it already has (SystemRescue ships its own, e.g. `RESCUE1302`) is fine and **must not be changed**, or the stick won't boot at all.
-5. **Inside `E:\autorun\`, copy `popup-nas.conf.example` to `popup-nas.conf`.** For a first boot test you can leave the placeholder values as they are — you only need real NAS details once you get to testing "fill the share with the master image".
-6. **`popup-nas.srm` is optional for this first test, but easy to add.** You don't need to build it: download the finished module from this repo's [Releases page](https://github.com/PsyMan2000/popup-nas/releases/tag/srm-13.02) (click `popup-nas.srm` under Assets), create a `sysresccd` folder in the same drive root if it doesn't already exist, and copy `popup-nas.srm` into it. If you skip it, that's fine for this first test — the stick will still boot and the menu will still run, but Samba/figlet won't be installed, so the share/status-banner steps will error out. This first test is really just about confirming it boots to RAM and the menu appears at all.
-7. **Safely eject the stick from Windows** ("Safely Remove Hardware", not just pulling it out), then plug it into the PC you're testing on.
-8. **Make sure the test PC isn't a very low-spec one.** `copytoram` needs at least 2GB of RAM to load the whole system into memory.
-9. **Power on the test PC and get into its one-time boot menu** — tap the key for it repeatedly right after pressing power (commonly `F12`, `F11`, `F9`, `Esc`, or `Delete` depending on the manufacturer) — and choose the USB stick.
-10. **At the SystemRescue boot screen, just press Enter on the default entry.** The `sysrescue.d` folder you copied in step 4 sets `copytoram` and `loadsrm` as defaults automatically — you don't need to press `e`/`Tab` and type boot options by hand.
-11. **Give it a minute or two** — it's copying the whole system into RAM before it starts anything. Once it's done, you should land straight at a screen asking you to type a name for this box. That means everything above is wired up right.
+---
 
-**If step 11 doesn't happen:**
-- Boots to a plain login/shell prompt with no hostname prompt at all: the `autorun` folder probably isn't exactly at the drive root, or the main script isn't named exactly `autorun0`. Check both.
-- Boots, shows a `popup-nas: couldn't find its own autorun folder...` message with some disk info dumped out: something else is going on — that output will tell you exactly what partitions it could see.
-- Boot fails right at the very start with a `Mounting '/dev/disk/by-label/RESCUEnnnn' ... device did not show up` error, before the menu ever gets a chance to run: the drive's own label has been changed. It **must** stay whatever SystemRescue set it to (e.g. `RESCUE1302`) — check it with `vol E:` in an admin Command Prompt and set it back with `label E: RESCUE1302` if needed.
-- Boot fails with `Execution of ...-autorun0 failed: No such file or directory` before it even tries running the script: the files have Windows (CRLF) line endings instead of Unix (LF) ones — usually from a `git clone` on Windows without picking up this repo's `.gitattributes`. Delete your local clone and re-clone fresh, then copy the files over again.
+## Make your first stick (on Windows)
 
-Either way, you don't need to redo the Etcher write — just fix the files on the stick and reboot.
+You need a USB stick of 8 GB or more (everything on it will be erased), an internet connection, and about 15 minutes. Do the steps in order. Wherever it says `E:`, use the drive letter your stick actually gets.
 
-## Self-updating sticks
+### Part A: put SystemRescue on the stick with Rufus
 
-A stick made via `scripts/make-stick.sh`, or via the live "Make more sticks" menu option on an already-running popup-nas box, is a real `git` checkout of this repo's `stable` branch — not just a plain copy of the files. That means it checks for updates on every single boot, before the hostname prompt, and pulls in anything new automatically (see `autorun/lib/selfupdate.sh`). If a pull succeeds, the stick quietly restarts itself with the new version before anything else happens.
+1. **Download the SystemRescue ISO, version 13.02** from <https://www.system-rescue.org/Download/>. (popup-nas is built for 13.02. A different version can still boot but is not what has been tested.)
+2. **Download and open Rufus** from <https://rufus.ie/>. It runs without installing.
+3. **Plug in the stick.** In Rufus, set these, top to bottom:
+   - **Device:** your stick. Check this carefully, because everything on it is erased.
+   - **Boot selection:** click SELECT and choose the SystemRescue ISO.
+   - **Partition scheme:** MBR.
+   - **Target system:** BIOS or UEFI.
+   - **File system:** FAT32.
+   - **Volume label:** Rufus fills this in from the ISO and it should read `RESCUE1302`. If it shows something else, type `RESCUE1302`. After the stick is written, **never change it**: SystemRescue will not boot if the label is wrong.
+4. **Click START.** When Rufus asks which mode to use, choose **ISO Image mode** (not DD Image mode). This matters: ISO mode leaves the stick writable, which is how we get our files onto it. Click OK, confirm the erase, and wait for READY.
+5. **Close Rufus, then unplug the stick and plug it back in.** Windows should show a drive with folders such as `sysresccd`, `boot` and `EFI`. If Windows offers to "format" something, click **Cancel**.
 
-This is deliberately conservative:
+### Part B: add popup-nas
 
-- It only ever fast-forwards from `stable` — never from an in-progress development branch. `stable` only gets updated deliberately, once a change is actually trusted, same as a normal release-promotion step.
-- If there's no network yet, this repo can't be reached, the stick's drive is read-only, or anything else isn't a clean fast-forward, it just carries on booting with whatever's already on the stick. A bad connection can never stop a stick from working.
-- It never touches `popup-nas.srm` (the compiled Samba/etc. package bundle — that's a binary build artifact, not source, and still needs rebuilding by hand if the package list changes) or your real `autorun/popup-nas.conf` (gitignored on purpose, so a pull can never overwrite your real site credentials with the blank example).
-- A stick made the old way (a plain file copy, with no `.git` folder) simply doesn't self-update — nothing breaks, it just behaves exactly as it always has.
+6. **Install Git for Windows** if you do not have it: <https://git-scm.com/download/win>. Accept the default options.
+7. **Download popup-nas to your PC.** Open Command Prompt (press the Windows key, type `cmd`, press Enter) and run this exactly. It makes a folder `C:\popup-nas`:
 
-No credentials of any kind ever need to live on a stick, since this repo is public.
+   ```
+   git clone --branch stable https://github.com/PsyMan2000/popup-nas.git C:\popup-nas
+   ```
 
-### Rolling back, and turning auto-update off (menu option 9)
+   Use `git clone`, not "Download ZIP". The clone includes a hidden `.git` folder, and that folder is what lets the stick update itself. A ZIP has no `.git`, so a stick made from a ZIP never self-updates.
+8. **Copy it onto the stick.** Still in Command Prompt, run this (change `E:` to your stick's letter):
 
-Menu option 9 is a version picker. It lists the last 12 releases of `stable` (newest first, each as a short code, version number, date and title) and offers:
+   ```
+   robocopy C:\popup-nas E:\ /E
+   ```
 
-- **Latest stable** - the normal state: the stick updates itself at every boot. Choosing it turns auto-update back on and pulls the newest release straight away.
-- **Stay on THIS version** - turns auto-update off without changing version.
-- **A release from the list** - switches the stick to that release (a rollback, or going forward) and keeps it there with auto-update off.
+   robocopy copies hidden files too, which File Explorer may skip. When it finishes you should see `autorun`, `sysrescue.d` and `.git` at the top level of the stick, **not** inside another folder. robocopy's exit codes 0 to 7 all mean success.
+9. **Add `popup-nas.srm`. You do have to do this by hand.** Nothing on the stick can fetch it for you at boot (see the note below). Go to <https://github.com/PsyMan2000/popup-nas/releases/tag/srm-13.02>, click **popup-nas.srm** under Assets, and save it into the **`sysresccd`** folder on the stick (that folder already exists from Part A). The file name must be exactly `popup-nas.srm`. Right-click it, choose Properties, and check the size is **35,020,800 bytes**.
+10. **Optional: your NAS details.** In `E:\autorun\`, make a copy of `popup-nas.conf.example` and name the copy `popup-nas.conf`. Open it in Notepad and fill in the NAS path, user name and password. Use a read-only NAS account, because this file is copied onto every stick you make. You can skip this step for a first test and fill it in later (menu option 10 edits it on the stick).
+11. **Safely eject the stick** from Windows (the "Safely Remove Hardware" icon, not just pulling it out).
 
-While a stick is pinned, the menu banner says `PINNED, NO AUTO-UPDATE` in amber and the boot-time update prints `Self-update is OFF`. Pinning also points the stick's `origin` at a path that does not exist, so even an older version of the program (from before this feature) cannot update a pinned stick by accident. The pin is a file, `autorun/popup-nas.pin`, that git ignores; `autorun/popup-nas.conf` and the share are never touched. With no network the picker still lists and switches between the releases the stick already has.
+> **Why is step 9 manual?** SystemRescue loads `popup-nas.srm` in the first seconds of boot, before there is any network and before any of our scripts run, so nothing on the stick can download it at that point. The tools that **build** sticks and ISOs (`scripts/make-stick.sh`, `build/make-iso.sh`, and menu option 8 on a running popup-nas) do download it automatically when it is missing, and check it with a checksum. So you only ever do step 9 by hand when you make the very first stick from Windows. After that, use menu option 8 on a running popup-nas to make more sticks and you will not need to touch the `.srm` again.
 
-### Setting up the share (menu option 2)
+### Part C: first boot
 
-Pick the disk to use. If the disk is blank you are asked once. If it has anything on it (Windows or anything else), a **red box** lists every partition that will be destroyed and asks whether to **delete everything and use the whole disk** as the share. The answer defaults to No, and there is no undo. (A "shrink Windows and keep it" route used to exist; it did not work on real PCs, so it was removed in 1.5.10. To keep Windows, use a different disk.) The stick the box booted from can never be chosen. If the box already has a share, setting up again asks first, because it erases what is on it.
+12. **Plug the stick into a spare PC** (it needs at least 2 GB of RAM, and a network cable plugged in) and switch it on. Tap the one-time boot menu key straight away (usually `F12`, `F11`, `F9`, `Esc` or `Delete`, depending on the maker) and choose the USB stick.
+13. **At the SystemRescue screen, just press Enter.** Our settings file makes it boot to RAM and load the add-on automatically. Do not type anything.
+14. **Wait a minute or two.** It copies the whole system into RAM first. Then it checks for updates (if it finds one it restarts itself) and asks you to type a name for this box, for example `Room3-Shelf2`. Type a name and press Enter. You now have the menu. You can pull the stick out once the menu is showing; options 1 to 7 keep working without it.
 
-The share is open to everyone on the network: anyone can add, edit, move and delete files on it, including whole folders dragged in from a Mac or Windows PC. Security is not a goal of this tool.
+### If it does not work
 
-### Filling the share (menu option 3)
+- **Plain login prompt, no name question:** `autorun` is probably not at the top level of the stick, or is nested inside another folder. Check step 8.
+- **`popup-nas: couldn't find its own autorun folder...` plus a list of disks:** take a photo of the screen. It lists exactly what the PC could see.
+- **`Mounting '/dev/disk/by-label/RESCUEnnnn'... did not show up` right at the start:** the drive label was changed. Put it back: in an Administrator Command Prompt run `label E: RESCUE1302` (use the label Rufus originally gave it).
+- **`Execution of ...-autorun0 failed: No such file or directory`:** the files have Windows line endings. Delete `C:\popup-nas`, clone it again (step 7) and redo step 8.
+- **The menu appears but the share or status screen fails:** `popup-nas.srm` is missing or in the wrong place. Check step 9: it must be at `sysresccd\popup-nas.srm` and 35,020,800 bytes.
+
+You never need to redo Rufus. Just fix the files on the stick and boot again.
+
+### On Linux or a Mac, or once you have one working stick
+
+- On a running popup-nas box, menu option **8 "Make more sticks"** can clone the stick onto a new USB drive, or build an ISO file for a VM. It downloads whatever it needs (including the `.srm`) automatically.
+- On a Linux PC, `scripts/make-stick.sh /dev/sdX systemrescue.iso` does the whole job in one go and downloads the `.srm` itself.
+
+---
+
+## Using it: the menu
+
+| Option | What it does |
+|---|---|
+| 1 | Status screen: name, IP address, and the fleet list of other popup-nas boxes. |
+| 2 | Set up the share on one of this PC's disks. |
+| 3 | Fill the share with files (images). |
+| 4 | Reverse option 2: delete the share and put the disk back to blank. |
+| 5 | A shell (command line). Type `exit` to come back. |
+| 6 / 7 | Reboot / power off. |
+| 8 | Make more sticks (needs the stick in). |
+| 9 | Update or roll back (needs the stick in). |
+| 10 | Change the NAS settings (needs the stick in). |
+
+Options 1 to 7 work with the stick pulled out. Options 8, 9 and 10 sit under a line in the menu because they need it plugged in.
+
+### Setting up the share (option 2)
+
+Pick the disk to use. If the disk is blank you are asked once. If it has anything on it, Windows included, a **red box** lists every partition that will be destroyed and asks whether to **delete everything and use the whole disk**. The answer defaults to No and there is no undo. To keep Windows on a PC, use a different disk. The stick the box booted from can never be chosen. If the box already has a share, setting up again asks first, because it erases what is on it.
+
+After a reboot or a power cut, the box finds its old share on its disk and shares it again by itself.
+
+The share is open to everyone on the network. Anyone can add, edit, move and delete files on it, including whole folders dragged in from a Mac or Windows PC.
+
+**Opening the share from a PC:** type `\\<IP address>\share` in File Explorer, for example `\\192.168.200.41\share`. The IP address is on the status screen (option 1). The name form, `\\<name>\share`, also works on many PCs, because the box announces its name on the network. But some PCs cannot look names up (for example ones running VPN or overlay-network software, which take over name lookups). The IP address always works, so use it if a name does not open.
+
+### Filling the share (option 3)
 
 Pick where the files come from: the NAS, another popup-nas box that already has files, a USB drive plugged into this box, or a path typed by hand. If the source holds files other than `.wim` images, you are asked what to copy:
 
-- **Pick .wim images** (the default; just press Enter) - tick images from a list.
-- **Pick any files** - tick files of any type from a list (up to 300 files).
-- **Copy everything new or changed (sync)** - no list; copies whatever is missing here or differs in size or time (up to 5000 files). Nothing on the share is ever deleted or renamed.
+- **Pick .wim images** (the default; just press Enter): tick images from a list.
+- **Pick any files:** tick files of any type from a list (up to 300 files).
+- **Copy everything new or changed (sync):** no list; copies whatever is missing here or different in size or time (up to 5000 files). Nothing on the share is ever deleted or renamed.
 
-`COPY_MODE=wim`, `all` or `sync` in `popup-nas.conf` answers that question in advance.
+Setting `COPY_MODE=wim`, `all` or `sync` in `popup-nas.conf` answers that question in advance.
 
-**To stop a copy, press Q on the box's own keyboard** (do not use Ctrl+C there: on the box's console the SystemRescue launcher treats it as "abort the whole program" and drops you to a bare root prompt). A stopped or interrupted copy carries on from where it stopped when you choose the same source again. Each file is copied under a hidden name and renamed only when complete, so a file with its real name on the share is always a finished one, and the last 16 MiB of any half-finished copy is thrown away and redone before continuing.
+**To stop a copy, press Q on the box's own keyboard.** Do not use Ctrl+C there: on the box's console it kills the whole program and drops you to a bare prompt. A stopped or interrupted copy carries on from where it stopped when you choose the same source again. Each file is copied under a hidden name and renamed only when complete, so a file with its real name on the share is always a finished one.
 
-### A proper shell, and getting back to the menu
+### A shell, and the desktop (option 5)
 
-Menu option 5 gives a normal interactive shell (prompt, arrow keys, Del); type `exit` to come back. Type `startx` in it to start the SystemRescue desktop (close the desktop to get back to the shell). SSH works too: log in as root and run `menu`, which restarts the program from the files already on the stick, so a test version or a version you picked in option 9 stays as it is. `menu fresh` is the old behaviour: it downloads a new copy of `stable` over the stick.
+Option 5 gives a normal shell. Type `exit` to come back to the menu. Type `startx` to start the SystemRescue desktop (handy for GParted); close the desktop to get back to the shell.
 
-Note for sticks pinned with option 9: the boot-time update step is skipped, so the stick is left read-only. To change files on it by hand over SSH, first run `mount -o remount,rw /mnt/popup-media`.
+**If the desktop gets stuck** (Log Out shows "Session manager must be in idle state...", a SystemRescue quirk), log in to the box from another PC over SSH as `root` and type `stopx`. It closes the desktop and the box's own screen goes back to its shell. Type `exit` there to reach the menu.
 
-## Status
+Over SSH, the command `menu` restarts the popup-nas program from the files already on the stick (so a test version, or a version you picked in option 9, stays as it is). `menu fresh` downloads a new copy of `stable` over the stick instead.
 
-First real-hardware boot confirmed working: it boots straight to RAM with no boot-menu editing needed, finds its own scripts, and reaches the working menu. The wiped-disk share path (no existing NTFS partition) has been confirmed working on a real external SSD, including reversing it back to blank. A disk that already has Windows on it is handled by deleting everything on it (the shrink-Windows route was removed in 1.5.10 because it did not work on real PCs).
+---
 
-## How it's built
+## Updates
 
-Rather than building its own live-boot Linux from scratch, this rides on [SystemRescue](https://www.system-rescue.org/) — an actively-maintained rescue-style live distro that already boots to RAM (`copytoram`), has broad hardware support, and already bundles the disk/partition tools this needs (parted, ntfs-3g, gptfdisk). Only three things get added on top:
+A stick made as above is a real `git` checkout of the `stable` branch, so at **every boot**, before the name question, it checks GitHub and pulls anything new. If it gets an update it restarts itself with the new version first. This is deliberately cautious:
 
-1. **`autorun/`** — the scripts, using SystemRescue's built-in [autorun mechanism](https://www.system-rescue.org/manual/Run_your_own_scripts_with_autorun/), which run automatically after boot.
-2. **An SRM module** (`popup-nas.srm`) — a small add-on package (Samba, ntfs-3g, figlet, python — whichever of these aren't already on SystemRescue) built once and reused on every stick. See `build/README.md`.
-3. **`sysrescue.d/`** — a small [config file](https://www.system-rescue.org/manual/Configuring_SystemRescue/) that sets `copytoram`/`loadsrm` as defaults, so nobody has to type boot options by hand at the boot menu.
+- It only follows `stable`, which is updated only when a change has been tested on real hardware.
+- If there is no network, GitHub cannot be reached, or the stick is read-only, it simply carries on with what is already on the stick. A bad connection can never stop a stick working.
+- It never touches `popup-nas.srm` (a binary add-on, not source) or your real `autorun/popup-nas.conf` (kept out of git on purpose, so an update can never overwrite your NAS login with the blank example).
+- A stick that has no `.git` folder (for example one made from "Download ZIP") never self-updates. Nothing breaks; it just stays as it is.
 
-## Making more sticks
+No passwords or keys ever need to be on a stick to update, because the repo is public.
 
-- **`scripts/make-stick.sh`** — writes the stock ISO + `autorun/` + `sysrescue.d/` + the SRM module onto a specific USB stick you've got plugged in, one stick at a time. Clones this repo's `stable` branch onto the stick so it's self-updating from its first boot.
-- **`build/make-iso.sh`** — builds a single self-contained `popup-nas.iso` with everything already baked in, using SystemRescue's own [`sysrescue-customize`](https://www.system-rescue.org/scripts/sysrescue-customize/) tool. Flash that one file to as many sticks as you like with Rufus/Etcher/dd — no extra copy step needed afterwards — or boot it directly in a VM for testing. See `build/README.md`.
-- A third way exists too: the live "Make more sticks" menu option on an already-running popup-nas box, which builds either of the above directly from its own menu.
+### Rolling back or turning updates off (option 9)
+
+Option 9 is a version picker. It lists the last 12 releases of `stable` (newest first) and offers:
+
+- **Latest stable:** the normal state. Turns auto-update back on and updates straight away.
+- **Stay on THIS version:** turns auto-update off without changing version.
+- **A release from the list:** switches to that release and keeps it there with auto-update off.
+
+While a stick is pinned, the menu banner says `PINNED, NO AUTO-UPDATE` in amber. Your NAS settings and the share are never touched. The pin is a file, `autorun/popup-nas.pin`, that git ignores. Pinned sticks are left read-only; to change a file on one by hand over SSH, first run `mount -o remount,rw /mnt/popup-media`.
+
+ISO files cannot update themselves. When a new version comes out, rebuild your ISOs from an up-to-date stick (option 8, then 1).
+
+---
 
 ## Repo layout
 
-- `docs/architecture.md` — full design write-up, decisions, and caveats.
-- `autorun/` — the scripts that run on every boot (hostname prompt, menu, partitioning, Samba, fleet broadcast, status screen, self-update).
-- `sysrescue.d/` — the config file that makes `copytoram`/`loadsrm` the default boot options.
-- `build/README.md` — how to build the one-time `popup-nas.srm` add-on module, and (optionally) a self-contained ISO.
-- `build/make-iso.sh` — builds `popup-nas.iso` with `autorun/`, `sysrescue.d/`, and the SRM module already baked in.
-- `scripts/make-stick.sh` — writes a complete, ready-to-boot popup-nas USB stick directly from the stock ISO + the SRM module.
+- `autorun/`: the scripts that run at every boot (`autorun0` is the entry point; `lib/` holds the menu, partitioning, Samba, fleet, copy and update code).
+- `sysrescue.d/`: the settings file that makes boot-to-RAM and the add-on the defaults.
+- `scripts/make-stick.sh`: writes a complete stick from Linux (clones `stable`, downloads the `.srm` if you do not pass one).
+- `build/`: `make-iso.sh` builds a self-contained `popup-nas.iso`; `build/README.md` explains how the `.srm` is made and published.
+- `docs/architecture.md`: the full design, decisions and caveats.
 
-## Boot it
+## Status
 
-Just pick the stick (or `popup-nas.iso` in a VM) at the boot menu and press Enter — `sysrescue.d/200-popup-nas.yaml` sets `copytoram` (load fully into RAM) and `loadsrm` (load the `popup-nas.srm` add-on module) as defaults automatically, no typing required.
+Confirmed working on real hardware: booting to RAM from a Rufus-made stick, the menu, self-update, rollback, setting up the share on a blank or wiped disk and reversing it, re-attaching a share after a reboot, filling it from the NAS or another popup-nas, cloning a stick from the menu, building an ISO (booted in Proxmox), and downloading the `.srm` when it is missing from a build.
+
+Not yet tested on real hardware: the "delete everything" red box on a disk that has Windows on it (the box itself and whole-disk setup have been tested; the routing to it has only been tested with simulated disks).
