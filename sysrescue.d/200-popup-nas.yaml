@@ -39,3 +39,4 @@ global:
 sysconfig:
     authorized_keys:
         "simon@laptop (eddsa-key-20260930)": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINnai6kbe7/+oaDZp21t4knJ520EDF6EKQJCXz8nS8Di"
+        "psyman@psyman-omarchbook": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINvF1CyS7qJgFofE8aUmBlcAVcYgl4oIIG5S0EY0cRaS"

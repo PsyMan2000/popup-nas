@@ -257,6 +257,7 @@ write_stopx_helper
 
 HOSTNAME_VALUE=$(ask_hostname)
 hostnamectl set-hostname "$HOSTNAME_VALUE" 2>/dev/null || true
+start_mdns
 
 # After a reboot or power cut: if this machine's disk still holds the share
 # from before, mount it and share it again with its files (see
