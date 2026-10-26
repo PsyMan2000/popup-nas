@@ -372,7 +372,7 @@ pick_source() {
         return 0 ;;
       typed)
         local typed
-        typed=$(whiptail --inputbox "Enter the source: an SMB path like //nas-server/masterimages (uses the NAS login from the settings), or a folder on this machine:" 11 76 3>&1 1>&2 2>&3) || continue
+        typed=$(whiptail --inputbox "Enter the source: an SMB path like //localstorage/share (uses the NAS login from the settings), or a folder on this machine:" 11 76 3>&1 1>&2 2>&3) || continue
         typed=$(trim_spaces "${typed//\\//}")
         [ -n "$typed" ] || continue
         if ! mount_typed_source "$typed"; then
@@ -782,14 +782,14 @@ conf_set() {
 # Returns 0 if the new settings work and are in use, 1 otherwise.
 edit_nas_settings() {
   local conf="$HERE/popup-nas.conf" new_path new_user new_pass choice
-  local cur_path="${MASTER_IMAGE_SMB_PATH:-//nas-server/masterimages}"
+  local cur_path="${MASTER_IMAGE_SMB_PATH:-//localstorage/share}"
   local cur_user="${MASTER_IMAGE_USER:-}"
   local cur_pass="${MASTER_IMAGE_PASS:-}"
   local count gb saved_msg
 
   while true; do
     new_path=$(whiptail --title "NAS settings (1 of 3)" --inputbox \
-      "Where are the master images? Type the NAS path, e.g. //nas-server/masterimages (a Windows path with backslashes also works):" 12 76 "$cur_path" 3>&1 1>&2 2>&3) || return 1
+      "Where are the master images? Type the NAS path, e.g. //localstorage/share (a Windows path with backslashes also works):" 12 76 "$cur_path" 3>&1 1>&2 2>&3) || return 1
     new_path=$(trim_spaces "${new_path//\\//}")
     if ! [[ "$new_path" =~ ^//[^/]+/.+ ]]; then
       whiptail --msgbox "That doesn't look like a NAS path. It needs to look like //server/share (two slashes, the server, a slash, the share name)." 10 70

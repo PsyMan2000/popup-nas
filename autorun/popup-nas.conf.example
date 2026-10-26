@@ -4,6 +4,9 @@
 # IMPORTANT: this file (including the password) ends up on every duplicated
 # stick. Use a dedicated, READ-ONLY NAS account here, never an admin credential.
 
+# The built-in default (used when this file is missing, or does not set these)
+# is //localstorage/share, user "s", password "s" (set in autorun/autorun0).
+# Only set the three lines below to use a different NAS on this stick.
 MASTER_IMAGE_SMB_PATH="//nas-server/masterimages"
 MASTER_IMAGE_USER="popup-nas-readonly"
 MASTER_IMAGE_PASS="changeme"

@@ -237,11 +237,35 @@ source "$LIB/build.sh"
 # shellcheck source=lib/menu.sh
 source "$LIB/menu.sh"
 
+# Built-in NAS defaults: what menu 3 and menu 10 show when this stick has no
+# popup-nas.conf, or a popup-nas.conf that does not set these. They are
+# deliberately short, throwaway login details for a closed deployment LAN, so
+# they are kept in git on purpose. A popup-nas.conf on the stick that sets
+# other values still wins, because it is sourced just below.
+NAS_DEFAULT_PATH="//localstorage/share"
+NAS_DEFAULT_USER="s"
+NAS_DEFAULT_PASS="s"
+# The old built-in NAS that older sticks have saved in their popup-nas.conf
+# (copied from the stick they were built from). It is swapped for the new
+# defaults, so no stick has to be edited by hand.
+NAS_OLD_DEFAULT_PATH="//172.16.16.150/popup-source"
+MASTER_IMAGE_SMB_PATH="$NAS_DEFAULT_PATH"
+MASTER_IMAGE_USER="$NAS_DEFAULT_USER"
+MASTER_IMAGE_PASS="$NAS_DEFAULT_PASS"
+
 # Per-site config baked onto the stick alongside this script.
 CONF="$HERE/popup-nas.conf"
 if [ -f "$CONF" ]; then
   # shellcheck disable=SC1090
   source "$CONF"
+fi
+# A stick still on the old built-in NAS gets the new defaults (a NAS someone
+# set by hand, i.e. any other path, is left exactly as it is). Menu 10 can
+# still change it afterwards.
+if [ "${MASTER_IMAGE_SMB_PATH:-}" = "$NAS_OLD_DEFAULT_PATH" ]; then
+  MASTER_IMAGE_SMB_PATH="$NAS_DEFAULT_PATH"
+  MASTER_IMAGE_USER="$NAS_DEFAULT_USER"
+  MASTER_IMAGE_PASS="$NAS_DEFAULT_PASS"
 fi
 
 clear
